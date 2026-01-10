@@ -162,37 +162,76 @@ async function loadModelIfNeeded() {
     console.log('Starting model load:', modelId);
     state.isLoadingModel = true;
     let progressInterval = null;
+    let lastProgress = 0;
+    let filesDownloaded = 0;
+    let totalFiles = 0;
+    let startTime = Date.now();
+    let lastUpdateTime = Date.now();
     
     try {
-        setStatus('Loading model: ' + modelId + ' (first time may take 1–2 minutes)…', true);
-        els.progressText.textContent = 'Downloading model files...';
+        setStatus('Preparing to download model...', true);
+        els.progressText.textContent = 'Initializing download...';
         els.transcribeFileBtn.disabled = true;
 
         // Show progress bar
         if (els.progressBar) {
             els.progressBar.style.display = 'block';
             els.progressFill.style.width = '0%';
-
-            // Simulate progress (transformers.js doesn't provide real progress)
-            progressInterval = setInterval(() => {
-                const currentWidth = parseFloat(els.progressFill.style.width) || 0;
-                if (currentWidth < 90) {
-                    els.progressFill.style.width = (currentWidth + 2) + '%';
-                }
-            }, 200);
         }
         
-        // Load with timeout
+        // Load with timeout and detailed progress tracking
         const loadPromise = pipeline('automatic-speech-recognition', modelId, {
             progress_callback: (progress) => {
-                if (progress.status === 'progress' && progress.progress) {
-                    const percent = Math.round(progress.progress);
-                    els.progressText.textContent = `Downloading: ${percent}%`;
-                    if (els.progressFill) {
-                        els.progressFill.style.width = percent + '%';
+                console.log('Progress update:', progress);
+                
+                if (progress.status === 'progress') {
+                    // Real download progress
+                    if (progress.progress !== undefined) {
+                        const percent = Math.round(progress.progress);
+                        lastProgress = percent;
+                        
+                        if (els.progressFill) {
+                            els.progressFill.style.width = percent + '%';
+                        }
+                        
+                        // Calculate elapsed time and estimate remaining
+                        const elapsed = (Date.now() - startTime) / 1000; // seconds
+                        const estimatedTotal = percent > 0 ? (elapsed / percent) * 100 : 0;
+                        const remaining = Math.max(0, estimatedTotal - elapsed);
+                        
+                        // Show which file is being downloaded
+                        const fileName = progress.file ? progress.file.split('/').pop() : 'model files';
+                        let statusText = `Downloading ${fileName}: ${percent}%`;
+                        
+                        if (remaining > 0 && percent > 5) {
+                            const mins = Math.floor(remaining / 60);
+                            const secs = Math.floor(remaining % 60);
+                            if (mins > 0) {
+                                statusText += ` (~${mins}m ${secs}s remaining)`;
+                            } else {
+                                statusText += ` (~${secs}s remaining)`;
+                            }
+                        }
+                        
+                        els.progressText.textContent = statusText;
+                        setStatus(`Downloading model: ${percent}%`, true);
+                        lastUpdateTime = Date.now();
                     }
                 } else if (progress.status === 'done') {
+                    filesDownloaded++;
+                    console.log(`File downloaded: ${progress.file || 'unknown'} (${filesDownloaded} files)`);
+                    els.progressText.textContent = `Downloaded ${filesDownloaded} file(s)...`;
+                } else if (progress.status === 'ready') {
+                    console.log('Model ready');
                     els.progressText.textContent = 'Loading model into memory...';
+                    setStatus('Initializing model...', true);
+                    if (els.progressFill) {
+                        els.progressFill.style.width = '95%';
+                    }
+                } else if (progress.status === 'initiate') {
+                    console.log('Download initiated:', progress.file);
+                    totalFiles++;
+                    els.progressText.textContent = `Starting download: ${progress.file || 'model file'}`;
                 }
             }
         });
@@ -210,17 +249,20 @@ async function loadModelIfNeeded() {
         }
         if (els.progressFill) {
             els.progressFill.style.width = '100%';
-            setTimeout(() => {
-                if (els.progressBar) {
-                    els.progressBar.style.display = 'none';
-                }
-            }, 1000);
         }
         
+        console.log('Model loaded successfully:', modelId, `(${filesDownloaded} files downloaded)`);
         setStatus('Model ready: ' + modelId, true);
-        els.progressText.textContent = '';
-        showAlert('Model loaded successfully.', 'success');
-        console.log('Model loaded successfully:', modelId);
+        els.progressText.textContent = `✓ Model loaded (${filesDownloaded} files)`;
+        showAlert('Model loaded successfully and ready to transcribe!', 'success');
+        
+        // Hide progress bar after a moment
+        setTimeout(() => {
+            if (els.progressBar) {
+                els.progressBar.style.display = 'none';
+            }
+            els.progressText.textContent = '';
+        }, 2000);
         
         if (state.selectedFile && !state.isTranscribing) {
             els.transcribeFileBtn.disabled = false;
@@ -634,17 +676,21 @@ function initializeApp() {
         attempts++;
         
         if (initTransformers()) {
-            console.log('Transformers.js loaded, auto-loading model...');
-            setStatus('Loading model...', true);
+            console.log('Transformers.js loaded, starting model download...');
+            setStatus('Starting model download...', true);
+            els.progressText.textContent = 'This may take 1-2 minutes on first load...';
+            
             loadModelIfNeeded().catch(err => {
                 console.warn('Auto-load failed:', err);
                 setStatus('Model load failed. Click "Load Model" to retry.', false);
+                els.progressText.textContent = '';
                 if (els.loadModelBtn) {
                     els.loadModelBtn.style.display = 'inline-block';
                 }
             });
         } else if (attempts < maxAttempts) {
             console.log(`Waiting for transformers.js... (attempt ${attempts}/${maxAttempts})`);
+            setStatus('Loading AI library...', true);
             setTimeout(checkAndLoad, 500);
         } else {
             console.error('Transformers.js failed to load after 20 seconds');
