@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="Local browser-based audio transcription using Whisper AI. Upload files or capture screen/tab audio.">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src 'self' https://huggingface.co https://cdn-lfs.huggingface.co https://cdn.jsdelivr.net blob:; worker-src 'self' blob:; child-src 'self' blob:;">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com https://r2cdn.perplexity.ai; connect-src 'self' https://huggingface.co https://cdn-lfs.huggingface.co https://cdn.jsdelivr.net blob:; worker-src 'self' blob:; child-src 'self' blob:;">
     <title>Local Whisper Transcriber</title>
     <link rel="stylesheet" href="css/styles.css">
 </head>
@@ -136,20 +136,20 @@
     </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/@xenova/transformers@2.6.2" id="transformers-script"></script>
-<script>
-    // Wait for transformers.js to load before loading app
-    const transformersScript = document.getElementById('transformers-script');
-    transformersScript.addEventListener('load', () => {
-        console.log('Transformers.js script loaded');
-        const appScript = document.createElement('script');
-        appScript.src = 'js/app.js';
-        document.body.appendChild(appScript);
-    });
-    transformersScript.addEventListener('error', () => {
-        console.error('Failed to load transformers.js from CDN');
-        document.getElementById('statusText').textContent = 'Failed to load library from CDN';
-    });
+<script type="module">
+    // Import transformers.js as ES module
+    import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.6.2/dist/transformers.min.js';
+    
+    // Make available globally
+    window.pipeline = pipeline;
+    window.env = env;
+    
+    console.log('Transformers.js loaded as module');
+    
+    // Load app after transformers.js is ready
+    const appScript = document.createElement('script');
+    appScript.src = 'js/app.js';
+    document.body.appendChild(appScript);
 </script>
 </body>
 </html>
