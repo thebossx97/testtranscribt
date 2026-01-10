@@ -49,6 +49,13 @@ function initTransformers() {
 const MAX_FILE_SIZE_MB = 500;
 const MODEL_LOAD_TIMEOUT = 300000; // 5 minutes
 
+// All available models
+const AVAILABLE_MODELS = [
+    { id: 'Xenova/whisper-tiny.en', name: 'Tiny', size: '~40MB' },
+    { id: 'Xenova/whisper-base.en', name: 'Base', size: '~75MB' },
+    { id: 'Xenova/whisper-small', name: 'Small', size: '~250MB' }
+];
+
 // State management
 const state = {
     transcriber: null,
@@ -60,7 +67,9 @@ const state = {
     shareStream: null,
     shareRecorder: null,
     shareChunks: [],
-    audioContexts: [] // Track for cleanup
+    audioContexts: [], // Track for cleanup
+    loadedModels: {}, // Cache for preloaded models
+    allModelsLoaded: false
 };
 
 // Helper to check if any operation is in progress
@@ -137,8 +146,122 @@ function validateFile(file) {
     return true;
 }
 
+// Preload all models sequentially
+async function preloadAllModels() {
+    console.log('Starting to preload all models...');
+    setStatus('Preloading all models...', true);
+    
+    for (let i = 0; i < AVAILABLE_MODELS.length; i++) {
+        const model = AVAILABLE_MODELS[i];
+        console.log(`\n=== Preloading model ${i + 1}/${AVAILABLE_MODELS.length}: ${model.name} (${model.size}) ===`);
+        
+        try {
+            setStatus(`Loading ${model.name} model (${i + 1}/${AVAILABLE_MODELS.length})...`, true);
+            els.progressText.textContent = `Downloading ${model.name} model ${model.size}...`;
+            
+            if (els.progressBar) {
+                els.progressBar.style.display = 'block';
+                els.progressFill.style.width = '0%';
+            }
+            
+            let startTime = Date.now();
+            let simulatedProgress = 0;
+            let hasRealProgress = false;
+            
+            // Fallback progress animation
+            const progressInterval = setInterval(() => {
+                if (!hasRealProgress && simulatedProgress < 90) {
+                    simulatedProgress += 0.5;
+                    if (els.progressFill) {
+                        els.progressFill.style.width = simulatedProgress + '%';
+                    }
+                    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+                    els.progressText.textContent = `Downloading ${model.name} model... ${Math.round(simulatedProgress)}% (${elapsed}s)`;
+                }
+            }, 500);
+            
+            // Load the model
+            const loadedModel = await pipeline('automatic-speech-recognition', model.id, {
+                progress_callback: (progress) => {
+                    console.log(`${model.name} progress:`, progress);
+                    hasRealProgress = true;
+                    
+                    if (progress.status === 'progress' && progress.progress !== undefined) {
+                        const percent = Math.round(progress.progress);
+                        simulatedProgress = percent;
+                        if (els.progressFill) {
+                            els.progressFill.style.width = percent + '%';
+                        }
+                        const elapsed = Math.floor((Date.now() - startTime) / 1000);
+                        els.progressText.textContent = `Downloading ${model.name}: ${percent}% (${elapsed}s)`;
+                    }
+                }
+            });
+            
+            clearInterval(progressInterval);
+            
+            // Store the loaded model
+            state.loadedModels[model.id] = loadedModel;
+            
+            if (els.progressFill) {
+                els.progressFill.style.width = '100%';
+            }
+            
+            const elapsed = Math.floor((Date.now() - startTime) / 1000);
+            console.log(`✓ ${model.name} model loaded successfully in ${elapsed}s`);
+            els.progressText.textContent = `✓ ${model.name} loaded (${elapsed}s)`;
+            
+            // Brief pause to show completion
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
+        } catch (err) {
+            console.error(`Failed to load ${model.name} model:`, err);
+            showAlert(`Failed to load ${model.name} model: ${err.message}`, 'error');
+            // Continue with next model even if one fails
+        }
+    }
+    
+    // All models loaded
+    state.allModelsLoaded = true;
+    if (els.progressBar) {
+        els.progressBar.style.display = 'none';
+    }
+    
+    console.log('\n=== All models preloaded successfully ===');
+    console.log('Loaded models:', Object.keys(state.loadedModels));
+    
+    setStatus('All models ready!', true);
+    els.progressText.textContent = '✓ All models loaded and cached';
+    showAlert('All models loaded successfully! Ready to transcribe.', 'success');
+    
+    // Set the default model
+    const defaultModelId = els.modelSelect.value;
+    if (state.loadedModels[defaultModelId]) {
+        state.transcriber = state.loadedModels[defaultModelId];
+        state.currentModelId = defaultModelId;
+    }
+    
+    // Enable transcribe button if file is selected
+    if (state.selectedFile) {
+        els.transcribeFileBtn.disabled = false;
+    }
+    
+    setTimeout(() => {
+        els.progressText.textContent = '';
+        setStatus('Ready to transcribe', false);
+    }, 3000);
+}
+
 async function loadModelIfNeeded() {
     const modelId = els.modelSelect.value;
+    
+    // Check if model is already preloaded
+    if (state.loadedModels[modelId]) {
+        console.log('Using preloaded model:', modelId);
+        state.transcriber = state.loadedModels[modelId];
+        state.currentModelId = modelId;
+        return;
+    }
     
     // Already loaded
     if (state.transcriber && state.currentModelId === modelId) {
@@ -646,10 +769,21 @@ function handleFileSelect(e) {
 }
 
 function handleModelChange() {
-    console.log('Model changed, clearing current model');
-    state.transcriber = null;
-    state.currentModelId = null;
-    setStatus('Model changed. Will load on next use.', false);
+    const newModelId = els.modelSelect.value;
+    console.log('Model changed to:', newModelId);
+    
+    // Switch to preloaded model if available
+    if (state.loadedModels[newModelId]) {
+        state.transcriber = state.loadedModels[newModelId];
+        state.currentModelId = newModelId;
+        setStatus(`Switched to ${newModelId.split('/')[1]} model`, false);
+        console.log('Switched to preloaded model:', newModelId);
+    } else {
+        state.transcriber = null;
+        state.currentModelId = null;
+        setStatus('Model will load on next use.', false);
+    }
+    
     els.transcribeFileBtn.disabled = !state.selectedFile || isAnyOperationInProgress();
 }
 
@@ -691,8 +825,8 @@ function initializeApp() {
     if (els.loadModelBtn) {
         els.loadModelBtn.addEventListener('click', () => {
             els.loadModelBtn.style.display = 'none';
-            loadModelIfNeeded().catch(err => {
-                console.error('Manual load failed:', err);
+            preloadAllModels().catch(err => {
+                console.error('Manual preload failed:', err);
                 els.loadModelBtn.style.display = 'inline-block';
             });
         });
@@ -712,13 +846,13 @@ function initializeApp() {
         attempts++;
         
         if (initTransformers()) {
-            console.log('Transformers.js loaded, starting model download...');
-            setStatus('Starting model download...', true);
-            els.progressText.textContent = 'This may take 1-2 minutes on first load...';
+            console.log('Transformers.js loaded, starting to preload all models...');
+            setStatus('Starting to preload all models...', true);
+            els.progressText.textContent = 'This will take 3-5 minutes on first load. All models will be cached for instant use later.';
             
-            loadModelIfNeeded().catch(err => {
-                console.warn('Auto-load failed:', err);
-                setStatus('Model load failed. Click "Load Model" to retry.', false);
+            preloadAllModels().catch(err => {
+                console.error('Preload failed:', err);
+                setStatus('Model preload failed. Click "Load Model" to retry.', false);
                 els.progressText.textContent = '';
                 if (els.loadModelBtn) {
                     els.loadModelBtn.style.display = 'inline-block';
