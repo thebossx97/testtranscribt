@@ -33,12 +33,18 @@ const state = {
     currentModelId: null,
     selectedFile: null,
     currentTranscript: '',
-    isProcessing: false,
+    isLoadingModel: false,
+    isTranscribing: false,
     shareStream: null,
     shareRecorder: null,
     shareChunks: [],
     audioContexts: [] // Track for cleanup
 };
+
+// Helper to check if any operation is in progress
+function isAnyOperationInProgress() {
+    return state.isLoadingModel || state.isTranscribing;
+}
 
 // DOM elements
 const els = {
@@ -77,6 +83,16 @@ function setStatus(text, active = false) {
     }
 }
 
+function logState() {
+    console.log('State:', {
+        isLoadingModel: state.isLoadingModel,
+        isTranscribing: state.isTranscribing,
+        hasTranscriber: !!state.transcriber,
+        currentModelId: state.currentModelId,
+        hasSelectedFile: !!state.selectedFile
+    });
+}
+
 function cleanupAudioContexts() {
     state.audioContexts.forEach(ctx => {
         if (ctx.state !== 'closed') {
@@ -104,12 +120,14 @@ async function loadModelIfNeeded() {
     
     // Already loaded
     if (state.transcriber && state.currentModelId === modelId) {
+        console.log('Model already loaded:', modelId);
         return;
     }
     
-    // Prevent concurrent loads
-    if (state.isProcessing) {
-        throw new Error('Another operation is in progress');
+    // Prevent concurrent model loads
+    if (state.isLoadingModel) {
+        console.warn('Model is already being loaded');
+        throw new Error('Model is already being loaded');
     }
     
     // Ensure transformers.js is initialized
@@ -119,7 +137,8 @@ async function loadModelIfNeeded() {
         }
     }
     
-    state.isProcessing = true;
+    console.log('Starting model load:', modelId);
+    state.isLoadingModel = true;
     let progressInterval = null;
     
     try {
@@ -179,8 +198,9 @@ async function loadModelIfNeeded() {
         setStatus('Model ready: ' + modelId, true);
         els.progressText.textContent = '';
         showAlert('Model loaded successfully.', 'success');
+        console.log('Model loaded successfully:', modelId);
         
-        if (state.selectedFile) {
+        if (state.selectedFile && !state.isTranscribing) {
             els.transcribeFileBtn.disabled = false;
         }
     } catch (err) {
@@ -198,7 +218,8 @@ async function loadModelIfNeeded() {
         showAlert('Failed to load model: ' + err.message);
         throw err;
     } finally {
-        state.isProcessing = false;
+        state.isLoadingModel = false;
+        console.log('Model load finished, isLoadingModel:', state.isLoadingModel);
     }
 }
 
@@ -245,18 +266,23 @@ async function fileToFloat32(file) {
 }
 
 async function transcribeFloat32(float32Data) {
-    if (state.isProcessing) {
+    if (state.isTranscribing) {
+        console.warn('Transcription already in progress');
         throw new Error('Another transcription is in progress');
     }
     
-    state.isProcessing = true;
+    console.log('Starting transcription, audio samples:', float32Data.length);
+    state.isTranscribing = true;
     
     try {
+        // Load model if needed (this has its own state management)
         await loadModelIfNeeded();
+        
         if (!state.transcriber) {
             throw new Error('Model not available');
         }
         
+        console.log('Running transcription...');
         els.progressText.textContent = 'Running Whisper model in browser…';
         setStatus('Transcribing…', true);
         
@@ -266,18 +292,26 @@ async function transcribeFloat32(float32Data) {
         els.progressText.textContent = '';
         setStatus('Done. Ready.', false);
         
+        console.log('Transcription complete, length:', state.currentTranscript.length);
+        
         if (state.currentTranscript.trim().length > 0) {
             els.copyBtn.disabled = false;
             els.downloadBtn.disabled = false;
         }
     } finally {
-        state.isProcessing = false;
+        state.isTranscribing = false;
+        console.log('Transcription finished, isTranscribing:', state.isTranscribing);
     }
 }
 
 async function transcribeSelectedFile() {
     if (!state.selectedFile) {
         showAlert('Please choose an audio file first.');
+        return;
+    }
+    
+    if (isAnyOperationInProgress()) {
+        showAlert('Please wait for the current operation to complete.', 'warning');
         return;
     }
     
@@ -291,6 +325,7 @@ async function transcribeSelectedFile() {
         setStatus('Processing audio file…', true);
         els.transcript.innerHTML = '';
         
+        console.log('Decoding audio file:', state.selectedFile.name);
         const audioData = await fileToFloat32(state.selectedFile);
         await transcribeFloat32(audioData);
     } catch (err) {
@@ -299,7 +334,7 @@ async function transcribeSelectedFile() {
         els.progressText.textContent = '';
         showAlert('Error during transcription: ' + err.message);
     } finally {
-        if (state.selectedFile && state.transcriber && !state.isProcessing) {
+        if (state.selectedFile && state.transcriber && !isAnyOperationInProgress()) {
             els.transcribeFileBtn.disabled = false;
         }
     }
@@ -324,13 +359,13 @@ function getSupportedMimeType() {
 
 async function startScreenShare() {
     try {
-        await loadModelIfNeeded();
-        if (!state.transcriber) {
+        if (isAnyOperationInProgress()) {
+            showAlert('Please wait for the current operation to complete.', 'warning');
             return;
         }
         
-        if (state.isProcessing) {
-            showAlert('Another operation is in progress', 'warning');
+        await loadModelIfNeeded();
+        if (!state.transcriber) {
             return;
         }
         
@@ -459,7 +494,7 @@ function cleanupScreenShare() {
     state.shareChunks = [];
     els.startShareBtn.disabled = false;
     els.stopShareBtn.disabled = true;
-    if (state.selectedFile && state.transcriber && !state.isProcessing) {
+    if (state.selectedFile && state.transcriber && !isAnyOperationInProgress()) {
         els.transcribeFileBtn.disabled = false;
     }
     els.progressText.textContent = '';
@@ -494,7 +529,7 @@ function handleFileSelect(e) {
         els.copyBtn.disabled = true;
         els.downloadBtn.disabled = true;
         
-        if (state.transcriber && !state.isProcessing) {
+        if (state.transcriber && !isAnyOperationInProgress()) {
             els.transcribeFileBtn.disabled = false;
         } else {
             els.transcribeFileBtn.disabled = true;
@@ -511,10 +546,11 @@ function handleFileSelect(e) {
 }
 
 function handleModelChange() {
+    console.log('Model changed, clearing current model');
     state.transcriber = null;
     state.currentModelId = null;
     setStatus('Model changed. Will load on next use.', false);
-    els.transcribeFileBtn.disabled = !state.selectedFile || state.isProcessing;
+    els.transcribeFileBtn.disabled = !state.selectedFile || isAnyOperationInProgress();
 }
 
 async function handleCopy() {
