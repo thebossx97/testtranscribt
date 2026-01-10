@@ -1,0 +1,23 @@
+{
+  "name": "local-whisper-transcriber",
+  "version": "1.0.0",
+  "description": "Browser-based audio transcription using Whisper AI",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "whisper",
+    "transcription",
+    "audio",
+    "ai"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

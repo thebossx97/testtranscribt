@@ -90,12 +90,30 @@ For local development with live reload, you can use any static server:
 # Python
 python -m http.server 8000
 
-# Node.js
+# Node.js (with Express server)
+npm install
+npm start
+
+# Or simple static server
 npx serve
 
 # PHP
 php -S localhost:8000
 ```
+
+## Deployment
+
+### Railway.app
+
+1. Push code to GitHub
+2. Go to [Railway.app](https://railway.app)
+3. Click "New Project" → "Deploy from GitHub repo"
+4. Select your repository
+5. Railway will auto-detect and deploy using the configuration files
+
+The app will be available at your Railway-provided URL.
+
+**Start command:** `npm start` (automatically configured)
 
 ## Known Limitations
 
