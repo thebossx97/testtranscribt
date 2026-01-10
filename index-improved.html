@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Local browser-based audio transcription using Whisper AI. Upload files or capture screen/tab audio.">
+    <title>Local Whisper Transcriber</title>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<div class="container">
+    <header>
+        <h1>🎧 Local Whisper Transcriber</h1>
+        <p class="subtitle">File upload + experimental screen/tab audio capture, all transcribed locally in your browser.</p>
+    </header>
+
+    <div class="layout">
+        <div class="panel">
+            <h2>Transcript</h2>
+
+            <div id="alert" class="alert"></div>
+
+            <div class="control-group">
+                <div class="model-selector">
+                    <label for="modelSelect" style="font-size: 13px; color: var(--color-gray-400); margin-right: 6px;">
+                        Model:
+                    </label>
+                    <select id="modelSelect">
+                        <option value="Xenova/whisper-tiny.en">Tiny (fastest, English)</option>
+                        <option value="Xenova/whisper-base.en" selected>Base (balanced, English)</option>
+                        <option value="Xenova/whisper-small">Small (more accurate, multi-lang)</option>
+                    </select>
+                </div>
+                <span class="badge">Runs 100% in browser</span>
+            </div>
+
+            <div id="status" class="status">
+                <div class="status-dot"></div>
+                <span id="statusText">Model not loaded yet</span>
+            </div>
+
+            <div class="control-group">
+                <button id="copyBtn" class="btn btn-secondary" disabled>📋 Copy text</button>
+                <button id="downloadBtn" class="btn btn-secondary" disabled>⬇️ Save as .txt</button>
+            </div>
+
+            <div id="progressText" class="hint"></div>
+
+            <div id="transcript" class="transcript-area"></div>
+
+            <div class="footer-note">
+                First run will download the model (cached in browser). Subsequent runs are much faster.
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>Inputs</h2>
+
+            <h3 style="font-size: 14px; margin-top: 0;">1. Upload audio file</h3>
+            <div class="control-group">
+                <input type="file" id="fileInput" accept="audio/*,video/*" style="display:none;">
+                <button id="selectFileBtn" class="btn btn-primary">📁 Choose audio file</button>
+            </div>
+            <div class="control-group">
+                <span id="fileName" class="hint">No file selected</span>
+            </div>
+            <div class="control-group">
+                <button id="transcribeFileBtn" class="btn btn-secondary" disabled>▶️ Transcribe file</button>
+            </div>
+
+            <hr style="margin: var(--space-16) 0; border: none; border-top: 1px solid rgba(0,0,0,0.06);" />
+
+            <h3 style="font-size: 14px;">2. Experimental: capture screen/tab audio</h3>
+            <p class="small-note">
+                Works best in Chrome/Edge on desktop when you share a tab with "Share audio" enabled.
+                Behavior varies by OS and browser. Treat this as experimental.
+            </p>
+            <div class="control-group">
+                <button id="startShareBtn" class="btn btn-primary">🖥️ Share screen/tab + audio</button>
+                <button id="stopShareBtn" class="btn btn-danger" disabled>⏹ Stop capture</button>
+            </div>
+            <p class="small-note">
+                When you click "Share", choose the tab/window/screen that plays the audio you want, and enable audio sharing if offered.
+            </p>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@xenova/transformers@2.6.2"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
