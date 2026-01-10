@@ -96,6 +96,14 @@ const els = {
     progressBar: document.getElementById('progressBar'),
     progressFill: document.getElementById('progressFill'),
     transcript: document.getElementById('transcript'),
+    // Startup screen elements
+    startupScreen: document.getElementById('startupScreen'),
+    startupModelName: document.getElementById('startupModelName'),
+    startupProgressFill: document.getElementById('startupProgressFill'),
+    startupProgressText: document.getElementById('startupProgressText'),
+    modelTiny: document.getElementById('modelTiny'),
+    modelBase: document.getElementById('modelBase'),
+    modelSmall: document.getElementById('modelSmall'),
 };
 
 // Utility functions
@@ -146,22 +154,54 @@ function validateFile(file) {
     return true;
 }
 
+// Update startup screen model status
+function updateStartupModelStatus(modelIndex, status, icon = '⏳') {
+    const modelElements = [els.modelTiny, els.modelBase, els.modelSmall];
+    const modelEl = modelElements[modelIndex];
+    
+    if (modelEl) {
+        const iconEl = modelEl.querySelector('.model-icon');
+        const statusEl = modelEl.querySelector('.model-status');
+        
+        if (iconEl) iconEl.textContent = icon;
+        if (statusEl) statusEl.textContent = status;
+        
+        // Update classes
+        modelEl.classList.remove('loading', 'complete');
+        if (status.includes('Loading') || status.includes('Downloading')) {
+            modelEl.classList.add('loading');
+        } else if (status.includes('✓') || status.includes('Complete')) {
+            modelEl.classList.add('complete');
+        }
+    }
+}
+
 // Preload all models sequentially
 async function preloadAllModels() {
     console.log('Starting to preload all models...');
-    setStatus('Preloading all models...', true);
+    
+    // Show startup screen
+    if (els.startupScreen) {
+        document.body.classList.add('loading');
+    }
     
     for (let i = 0; i < AVAILABLE_MODELS.length; i++) {
         const model = AVAILABLE_MODELS[i];
         console.log(`\n=== Preloading model ${i + 1}/${AVAILABLE_MODELS.length}: ${model.name} (${model.size}) ===`);
         
         try {
-            setStatus(`Loading ${model.name} model (${i + 1}/${AVAILABLE_MODELS.length})...`, true);
-            els.progressText.textContent = `Downloading ${model.name} model ${model.size}...`;
+            // Update startup screen
+            if (els.startupModelName) {
+                els.startupModelName.textContent = `Loading ${model.name} Model (${i + 1}/${AVAILABLE_MODELS.length})`;
+            }
+            if (els.startupProgressText) {
+                els.startupProgressText.textContent = `Downloading ${model.name} model ${model.size}...`;
+            }
             
-            if (els.progressBar) {
-                els.progressBar.style.display = 'block';
-                els.progressFill.style.width = '0%';
+            updateStartupModelStatus(i, 'Loading...', '⏳');
+            
+            if (els.startupProgressFill) {
+                els.startupProgressFill.style.width = '0%';
             }
             
             let startTime = Date.now();
@@ -172,11 +212,14 @@ async function preloadAllModels() {
             const progressInterval = setInterval(() => {
                 if (!hasRealProgress && simulatedProgress < 90) {
                     simulatedProgress += 0.5;
-                    if (els.progressFill) {
-                        els.progressFill.style.width = simulatedProgress + '%';
+                    if (els.startupProgressFill) {
+                        els.startupProgressFill.style.width = simulatedProgress + '%';
                     }
                     const elapsed = Math.floor((Date.now() - startTime) / 1000);
-                    els.progressText.textContent = `Downloading ${model.name} model... ${Math.round(simulatedProgress)}% (${elapsed}s)`;
+                    if (els.startupProgressText) {
+                        els.startupProgressText.textContent = `Downloading ${model.name} model... ${Math.round(simulatedProgress)}% (${elapsed}s)`;
+                    }
+                    updateStartupModelStatus(i, `${Math.round(simulatedProgress)}% (${elapsed}s)`, '⏳');
                 }
             }, 500);
             
@@ -189,11 +232,14 @@ async function preloadAllModels() {
                     if (progress.status === 'progress' && progress.progress !== undefined) {
                         const percent = Math.round(progress.progress);
                         simulatedProgress = percent;
-                        if (els.progressFill) {
-                            els.progressFill.style.width = percent + '%';
+                        if (els.startupProgressFill) {
+                            els.startupProgressFill.style.width = percent + '%';
                         }
                         const elapsed = Math.floor((Date.now() - startTime) / 1000);
-                        els.progressText.textContent = `Downloading ${model.name}: ${percent}% (${elapsed}s)`;
+                        if (els.startupProgressText) {
+                            els.startupProgressText.textContent = `Downloading ${model.name}: ${percent}% (${elapsed}s)`;
+                        }
+                        updateStartupModelStatus(i, `${percent}% (${elapsed}s)`, '📥');
                     }
                 }
             });
@@ -203,16 +249,21 @@ async function preloadAllModels() {
             // Store the loaded model
             state.loadedModels[model.id] = loadedModel;
             
-            if (els.progressFill) {
-                els.progressFill.style.width = '100%';
+            if (els.startupProgressFill) {
+                els.startupProgressFill.style.width = '100%';
             }
             
             const elapsed = Math.floor((Date.now() - startTime) / 1000);
             console.log(`✓ ${model.name} model loaded successfully in ${elapsed}s`);
-            els.progressText.textContent = `✓ ${model.name} loaded (${elapsed}s)`;
+            
+            if (els.startupProgressText) {
+                els.startupProgressText.textContent = `✓ ${model.name} loaded in ${elapsed}s`;
+            }
+            
+            updateStartupModelStatus(i, `✓ Complete (${elapsed}s)`, '✅');
             
             // Brief pause to show completion
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            await new Promise(resolve => setTimeout(resolve, 800));
             
         } catch (err) {
             console.error(`Failed to load ${model.name} model:`, err);
@@ -223,16 +274,20 @@ async function preloadAllModels() {
     
     // All models loaded
     state.allModelsLoaded = true;
-    if (els.progressBar) {
-        els.progressBar.style.display = 'none';
-    }
     
     console.log('\n=== All models preloaded successfully ===');
     console.log('Loaded models:', Object.keys(state.loadedModels));
     
-    setStatus('All models ready!', true);
-    els.progressText.textContent = '✓ All models loaded and cached';
-    showAlert('All models loaded successfully! Ready to transcribe.', 'success');
+    // Update startup screen
+    if (els.startupModelName) {
+        els.startupModelName.textContent = '✓ All Models Loaded!';
+    }
+    if (els.startupProgressText) {
+        els.startupProgressText.textContent = 'Initializing application...';
+    }
+    if (els.startupProgressFill) {
+        els.startupProgressFill.style.width = '100%';
+    }
     
     // Set the default model
     const defaultModelId = els.modelSelect.value;
@@ -246,10 +301,16 @@ async function preloadAllModels() {
         els.transcribeFileBtn.disabled = false;
     }
     
+    // Hide startup screen with fade out
     setTimeout(() => {
-        els.progressText.textContent = '';
+        if (els.startupScreen) {
+            els.startupScreen.classList.add('hidden');
+        }
+        document.body.classList.remove('loading');
+        
         setStatus('Ready to transcribe', false);
-    }, 3000);
+        showAlert('All models loaded successfully! Ready to transcribe.', 'success');
+    }, 1500);
 }
 
 async function loadModelIfNeeded() {

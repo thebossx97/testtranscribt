@@ -8,6 +8,50 @@
     <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
+<!-- Startup Loading Screen -->
+<div id="startupScreen" class="startup-screen">
+    <div class="startup-content">
+        <div class="startup-logo">
+            <h1>🎧 Local Whisper Transcriber</h1>
+            <p class="startup-subtitle">Loading AI Models...</p>
+        </div>
+        
+        <div class="startup-progress-container">
+            <div id="startupModelName" class="startup-model-name">Initializing...</div>
+            
+            <div class="startup-progress-bar">
+                <div id="startupProgressFill" class="startup-progress-fill"></div>
+            </div>
+            
+            <div id="startupProgressText" class="startup-progress-text">Preparing to download models...</div>
+            
+            <div id="startupModelList" class="startup-model-list">
+                <div class="model-item" id="modelTiny">
+                    <span class="model-icon">⏳</span>
+                    <span class="model-label">Tiny Model (~40MB)</span>
+                    <span class="model-status">Waiting...</span>
+                </div>
+                <div class="model-item" id="modelBase">
+                    <span class="model-icon">⏳</span>
+                    <span class="model-label">Base Model (~75MB)</span>
+                    <span class="model-status">Waiting...</span>
+                </div>
+                <div class="model-item" id="modelSmall">
+                    <span class="model-icon">⏳</span>
+                    <span class="model-label">Small Model (~250MB)</span>
+                    <span class="model-status">Waiting...</span>
+                </div>
+            </div>
+            
+            <div class="startup-info">
+                <p>First-time setup: Downloading ~365MB of AI models</p>
+                <p>This takes 3-5 minutes but only happens once</p>
+                <p>All models will be cached for instant future use</p>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="container">
     <header>
         <h1>🎧 Local Whisper Transcriber</h1>
