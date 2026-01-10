@@ -173,22 +173,44 @@ async function loadModelIfNeeded() {
         els.progressText.textContent = 'Initializing download...';
         els.transcribeFileBtn.disabled = true;
 
-        // Show progress bar
+        // Show progress bar immediately
+        console.log('Showing progress bar, element exists:', !!els.progressBar);
         if (els.progressBar) {
             els.progressBar.style.display = 'block';
             els.progressFill.style.width = '0%';
+            console.log('Progress bar displayed, style:', els.progressBar.style.display);
+        } else {
+            console.error('Progress bar element not found!');
         }
+        
+        // Start a fallback progress animation in case real progress doesn't work
+        let simulatedProgress = 0;
+        let hasRealProgress = false;
+        
+        progressInterval = setInterval(() => {
+            if (!hasRealProgress && simulatedProgress < 90) {
+                simulatedProgress += 0.5; // Slow increment
+                if (els.progressFill) {
+                    els.progressFill.style.width = simulatedProgress + '%';
+                }
+                
+                const elapsed = Math.floor((Date.now() - startTime) / 1000);
+                els.progressText.textContent = `Downloading model... ${Math.round(simulatedProgress)}% (${elapsed}s elapsed)`;
+            }
+        }, 500);
         
         // Load with timeout and detailed progress tracking
         const loadPromise = pipeline('automatic-speech-recognition', modelId, {
             progress_callback: (progress) => {
-                console.log('Progress update:', progress);
+                console.log('Progress callback received:', progress);
+                hasRealProgress = true; // We got real progress, stop simulation
                 
                 if (progress.status === 'progress') {
                     // Real download progress
                     if (progress.progress !== undefined) {
                         const percent = Math.round(progress.progress);
                         lastProgress = percent;
+                        simulatedProgress = percent; // Sync simulation with real progress
                         
                         if (els.progressFill) {
                             els.progressFill.style.width = percent + '%';
@@ -216,6 +238,20 @@ async function loadModelIfNeeded() {
                         els.progressText.textContent = statusText;
                         setStatus(`Downloading model: ${percent}%`, true);
                         lastUpdateTime = Date.now();
+                    }
+                } else if (progress.status === 'download') {
+                    // Alternative progress format
+                    console.log('Download progress:', progress);
+                    if (progress.loaded && progress.total) {
+                        const percent = Math.round((progress.loaded / progress.total) * 100);
+                        simulatedProgress = percent;
+                        if (els.progressFill) {
+                            els.progressFill.style.width = percent + '%';
+                        }
+                        const mb = (progress.loaded / 1024 / 1024).toFixed(1);
+                        const totalMb = (progress.total / 1024 / 1024).toFixed(1);
+                        els.progressText.textContent = `Downloading: ${mb}MB / ${totalMb}MB (${percent}%)`;
+                        setStatus(`Downloading model: ${percent}%`, true);
                     }
                 } else if (progress.status === 'done') {
                     filesDownloaded++;
