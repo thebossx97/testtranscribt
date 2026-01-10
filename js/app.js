@@ -1,8 +1,27 @@
-const { pipeline, env } = window;
+// Wait for transformers.js to load - access via window object
+let pipeline, env;
 
-// Configure transformers.js
-env.allowLocalModels = true;
-env.backends.onnx.wasm.numThreads = navigator.hardwareConcurrency || 4;
+// Initialize transformers.js when available
+function initTransformers() {
+    if (window.transformers) {
+        pipeline = window.transformers.pipeline;
+        env = window.transformers.env;
+    } else if (window.pipeline && window.env) {
+        pipeline = window.pipeline;
+        env = window.env;
+    } else {
+        console.error('Transformers.js not loaded');
+        return false;
+    }
+    
+    // Configure transformers.js
+    env.allowLocalModels = true;
+    env.backends.onnx.wasm.numThreads = navigator.hardwareConcurrency || 4;
+    env.backends.onnx.wasm.proxy = false;
+    
+    console.log('Transformers.js initialized');
+    return true;
+}
 
 // Constants
 const MAX_FILE_SIZE_MB = 500;
@@ -26,6 +45,7 @@ const els = {
     alert: document.getElementById('alert'),
     status: document.getElementById('status'),
     statusText: document.getElementById('statusText'),
+    loadModelBtn: document.getElementById('loadModelBtn'),
     modelSelect: document.getElementById('modelSelect'),
     fileInput: document.getElementById('fileInput'),
     selectFileBtn: document.getElementById('selectFileBtn'),
@@ -36,8 +56,8 @@ const els = {
     copyBtn: document.getElementById('copyBtn'),
     downloadBtn: document.getElementById('downloadBtn'),
     progressText: document.getElementById('progressText'),
-        progressBar: document.getElementById('progressBar'),
-        progressFill: document.getElementById('progressFill'),
+    progressBar: document.getElementById('progressBar'),
+    progressFill: document.getElementById('progressFill'),
     transcript: document.getElementById('transcript'),
 };
 
@@ -92,6 +112,13 @@ async function loadModelIfNeeded() {
         throw new Error('Another operation is in progress');
     }
     
+    // Ensure transformers.js is initialized
+    if (!pipeline || !env) {
+        if (!initTransformers()) {
+            throw new Error('Transformers.js library not loaded. Please refresh the page.');
+        }
+    }
+    
     state.isProcessing = true;
     let progressInterval = null;
     
@@ -113,9 +140,6 @@ async function loadModelIfNeeded() {
                 }
             }, 200);
         }
-        
-        // Configure progress callback for transformers.js
-        env.backends.onnx.wasm.proxy = false;
         
         // Load with timeout
         const loadPromise = pipeline('automatic-speech-recognition', modelId, {
@@ -527,6 +551,17 @@ function initializeApp() {
     els.copyBtn.addEventListener('click', handleCopy);
     els.downloadBtn.addEventListener('click', handleDownload);
     
+    // Manual model load button
+    if (els.loadModelBtn) {
+        els.loadModelBtn.addEventListener('click', () => {
+            els.loadModelBtn.style.display = 'none';
+            loadModelIfNeeded().catch(err => {
+                console.error('Manual load failed:', err);
+                els.loadModelBtn.style.display = 'inline-block';
+            });
+        });
+    }
+    
     // Cleanup on page unload
     window.addEventListener('beforeunload', () => {
         cleanupScreenShare();
@@ -534,12 +569,37 @@ function initializeApp() {
     });
     
     // Wait for transformers.js to be ready, then auto-load model
-    setTimeout(() => {
-        if (typeof pipeline !== 'undefined') {
-            console.log('Auto-loading model...');
-            loadModelIfNeeded().catch(err => console.warn('Auto-load failed:', err));
+    let attempts = 0;
+    const maxAttempts = 20; // 10 seconds max
+    
+    const checkAndLoad = () => {
+        attempts++;
+        
+        if (initTransformers()) {
+            console.log('Transformers.js loaded, auto-loading model...');
+            setStatus('Loading model...', true);
+            loadModelIfNeeded().catch(err => {
+                console.warn('Auto-load failed:', err);
+                setStatus('Model load failed. Click "Load Model" to retry.', false);
+                if (els.loadModelBtn) {
+                    els.loadModelBtn.style.display = 'inline-block';
+                }
+            });
+        } else if (attempts < maxAttempts) {
+            console.log(`Waiting for transformers.js... (attempt ${attempts}/${maxAttempts})`);
+            setTimeout(checkAndLoad, 500);
+        } else {
+            console.error('Transformers.js failed to load after 10 seconds');
+            setStatus('Failed to load library. Please refresh the page.', false);
+            showAlert('Failed to load Transformers.js library. Please check your internet connection and refresh.', 'error');
+            if (els.loadModelBtn) {
+                els.loadModelBtn.style.display = 'inline-block';
+            }
         }
-    }, 500);
+    };
+    
+    // Start checking after a short delay
+    setTimeout(checkAndLoad, 100);
 }
 
 
