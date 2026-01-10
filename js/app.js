@@ -36,6 +36,8 @@ const els = {
     copyBtn: document.getElementById('copyBtn'),
     downloadBtn: document.getElementById('downloadBtn'),
     progressText: document.getElementById('progressText'),
+        progressBar: document.getElementById('progressBar'),
+        progressFill: document.getElementById('progressFill'),
     transcript: document.getElementById('transcript'),
 };
 
@@ -96,6 +98,18 @@ async function loadModelIfNeeded() {
         setStatus('Loading model: ' + modelId + ' (first time may take 1–2 minutes)…', true);
         els.progressText.textContent = 'Downloading model files...';
         els.transcribeFileBtn.disabled = true;
+
+                // Show progress bar
+                els.progressBar.style.display = 'block';
+                els.progressFill.style.width = '0%';
+
+                // Simulate progress (transformers.js doesn't provide real progress)
+                const progressInterval = setInterval(() => {
+                                const currentWidth = parseFloat(els.progressFill.style.width) || 0;
+                                if (currentWidth < 90) {
+                                                    els.progressFill.style.width = (currentWidth + 2) + '%';
+                                                }
+                            }, 200);
         
         // Load with timeout
         const loadPromise = pipeline('automatic-speech-recognition', modelId);
@@ -105,6 +119,11 @@ async function loadModelIfNeeded() {
         
         state.transcriber = await Promise.race([loadPromise, timeoutPromise]);
         state.currentModelId = modelId;
+
+                // Complete progress
+                clearInterval(progressInterval);
+                els.progressFill.style.width = '100%';
+                setTimeout(() => els.progressBar.style.display = 'none', 1000);
         
         setStatus('Model ready: ' + modelId, true);
         els.progressText.textContent = '';
@@ -119,6 +138,8 @@ async function loadModelIfNeeded() {
         state.currentModelId = null;
         setStatus('Model failed to load');
         els.progressText.textContent = '';
+                clearInterval(progressInterval);
+                els.progressBar.style.display = 'none';
         showAlert('Failed to load model: ' + err.message);
         throw err;
     } finally {
@@ -446,17 +467,9 @@ function initializeApp() {
         cleanupAudioContexts();
     });
     
-    // Lazy-load model on first interaction
-    window.addEventListener('click', () => {
-        if (!state.transcriber && !state.isProcessing) {
-            loadModelIfNeeded().catch(err => {
-                console.warn('Background model load failed:', err);
-            });
-        }
-    }, { once: true });
-    
-    console.log('Local Whisper Transcriber initialized');
-}
+    // Auto-load model on app initialization
+    loadModelIfNeeded().catch(err => console.warn('Auto-load failed:', err));}
+
 
 // Start the app when DOM is ready
 if (document.readyState === 'loading') {
