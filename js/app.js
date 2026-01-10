@@ -532,11 +532,28 @@ async function blobToFloat32(blob) {
     let audioCtx = null;
     try {
         const arrayBuffer = await blob.arrayBuffer();
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
         state.audioContexts.push(audioCtx);
         
+        console.log('AudioContext sample rate:', audioCtx.sampleRate);
+        
         const decoded = await audioCtx.decodeAudioData(arrayBuffer);
+        console.log('Decoded audio - duration:', decoded.duration, 'sample rate:', decoded.sampleRate);
+        
         const raw = decoded.getChannelData(0);
+        
+        // Resample to 16kHz if needed
+        if (decoded.sampleRate !== 16000) {
+            console.log('Resampling from', decoded.sampleRate, 'to 16000 Hz');
+            const offlineCtx = new OfflineAudioContext(1, Math.ceil(decoded.duration * 16000), 16000);
+            const source = offlineCtx.createBufferSource();
+            source.buffer = decoded;
+            source.connect(offlineCtx.destination);
+            source.start(0);
+            const resampled = await offlineCtx.startRendering();
+            return new Float32Array(resampled.getChannelData(0));
+        }
+        
         return new Float32Array(raw);
     } catch (err) {
         console.error('Audio decode error:', err);
@@ -553,11 +570,28 @@ async function fileToFloat32(file) {
     let audioCtx = null;
     try {
         const arrayBuffer = await file.arrayBuffer();
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
         state.audioContexts.push(audioCtx);
         
+        console.log('AudioContext sample rate:', audioCtx.sampleRate);
+        
         const decoded = await audioCtx.decodeAudioData(arrayBuffer);
+        console.log('Decoded audio - duration:', decoded.duration, 'sample rate:', decoded.sampleRate, 'channels:', decoded.numberOfChannels);
+        
         const raw = decoded.getChannelData(0);
+        
+        // Resample to 16kHz if needed
+        if (decoded.sampleRate !== 16000) {
+            console.log('Resampling from', decoded.sampleRate, 'to 16000 Hz');
+            const offlineCtx = new OfflineAudioContext(1, Math.ceil(decoded.duration * 16000), 16000);
+            const source = offlineCtx.createBufferSource();
+            source.buffer = decoded;
+            source.connect(offlineCtx.destination);
+            source.start(0);
+            const resampled = await offlineCtx.startRendering();
+            return new Float32Array(resampled.getChannelData(0));
+        }
+        
         return new Float32Array(raw);
     } catch (err) {
         console.error('File decode error:', err);
@@ -577,6 +611,7 @@ async function transcribeFloat32(float32Data) {
     }
     
     console.log('Starting transcription, audio samples:', float32Data.length);
+    console.log('Sample rate should be 16000 for Whisper');
     state.isTranscribing = true;
     
     try {
@@ -587,11 +622,25 @@ async function transcribeFloat32(float32Data) {
             throw new Error('Model not available');
         }
         
+        console.log('Current model ID:', state.currentModelId);
+        console.log('Transcriber object:', state.transcriber);
+        
         console.log('Running transcription...');
+        console.log('Transcriber type:', typeof state.transcriber);
+        console.log('Audio data length:', float32Data.length);
+        
         els.progressText.textContent = 'Running Whisper model in browser…';
         setStatus('Transcribing…', true);
         
-        const result = await state.transcriber(float32Data);
+        // Call the transcriber with proper format
+        const result = await state.transcriber(float32Data, {
+            chunk_length_s: 30,
+            stride_length_s: 5,
+            return_timestamps: false
+        });
+        
+        console.log('Transcription result:', result);
+        
         state.currentTranscript = result.text || '';
         els.transcript.textContent = state.currentTranscript || '[Empty transcript]';
         els.progressText.textContent = '';
