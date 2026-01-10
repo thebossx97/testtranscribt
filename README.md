@@ -121,6 +121,16 @@ The app will be available at your Railway-provided URL.
 2. **File Size**: Very large files (>500MB) may cause browser performance issues
 3. **Model Loading**: First load requires internet connection to download model
 4. **Audio Format**: Some exotic audio codecs may not be supported
+5. **CDN Dependency**: Requires loading transformers.js from CDN (jsdelivr.net)
+
+## Troubleshooting
+
+**"Failed to load Transformers.js library" error:**
+- Check your internet connection
+- Ensure jsdelivr.net CDN is not blocked by firewall/proxy
+- Try refreshing the page
+- Check browser console (F12) for detailed error messages
+- Click the "Load Model" button to retry manually
 
 ## Privacy
 

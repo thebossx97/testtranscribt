@@ -90,7 +90,20 @@
     </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/@xenova/transformers@2.6.2"></script>
-<script src="js/app.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xenova/transformers@2.6.2" id="transformers-script"></script>
+<script>
+    // Wait for transformers.js to load before loading app
+    const transformersScript = document.getElementById('transformers-script');
+    transformersScript.addEventListener('load', () => {
+        console.log('Transformers.js script loaded');
+        const appScript = document.createElement('script');
+        appScript.src = 'js/app.js';
+        document.body.appendChild(appScript);
+    });
+    transformersScript.addEventListener('error', () => {
+        console.error('Failed to load transformers.js from CDN');
+        document.getElementById('statusText').textContent = 'Failed to load library from CDN';
+    });
+</script>
 </body>
 </html>

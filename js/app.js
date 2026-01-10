@@ -3,24 +3,46 @@ let pipeline, env;
 
 // Initialize transformers.js when available
 function initTransformers() {
-    if (window.transformers) {
+    console.log('Checking for transformers.js...');
+    console.log('window.transformers:', typeof window.transformers);
+    console.log('window.pipeline:', typeof window.pipeline);
+    console.log('window.env:', typeof window.env);
+    
+    // Try different ways transformers.js might be exposed
+    if (window.transformers && window.transformers.pipeline && window.transformers.env) {
+        console.log('Found transformers.js as window.transformers');
         pipeline = window.transformers.pipeline;
         env = window.transformers.env;
     } else if (window.pipeline && window.env) {
+        console.log('Found transformers.js as window.pipeline/env');
         pipeline = window.pipeline;
         env = window.env;
     } else {
-        console.error('Transformers.js not loaded');
+        // Check if script is still loading
+        const scripts = document.querySelectorAll('script[src*="transformers"]');
+        console.log('Transformers script tags found:', scripts.length);
+        scripts.forEach((script, i) => {
+            console.log(`Script ${i}:`, script.src, 'loaded:', script.readyState || 'unknown');
+        });
+        
+        console.error('Transformers.js not loaded yet or not found');
         return false;
     }
     
-    // Configure transformers.js
-    env.allowLocalModels = true;
-    env.backends.onnx.wasm.numThreads = navigator.hardwareConcurrency || 4;
-    env.backends.onnx.wasm.proxy = false;
-    
-    console.log('Transformers.js initialized');
-    return true;
+    try {
+        // Configure transformers.js
+        env.allowLocalModels = true;
+        env.backends.onnx.wasm.numThreads = navigator.hardwareConcurrency || 4;
+        env.backends.onnx.wasm.proxy = false;
+        
+        console.log('Transformers.js initialized successfully');
+        console.log('Pipeline type:', typeof pipeline);
+        console.log('Env type:', typeof env);
+        return true;
+    } catch (err) {
+        console.error('Error configuring transformers.js:', err);
+        return false;
+    }
 }
 
 // Constants
@@ -606,7 +628,7 @@ function initializeApp() {
     
     // Wait for transformers.js to be ready, then auto-load model
     let attempts = 0;
-    const maxAttempts = 20; // 10 seconds max
+    const maxAttempts = 40; // 20 seconds max (increased from 10)
     
     const checkAndLoad = () => {
         attempts++;
@@ -625,8 +647,9 @@ function initializeApp() {
             console.log(`Waiting for transformers.js... (attempt ${attempts}/${maxAttempts})`);
             setTimeout(checkAndLoad, 500);
         } else {
-            console.error('Transformers.js failed to load after 10 seconds');
-            setStatus('Failed to load library. Please refresh the page.', false);
+            console.error('Transformers.js failed to load after 20 seconds');
+            console.log('Final check - window keys:', Object.keys(window).filter(k => k.toLowerCase().includes('transform')));
+            setStatus('Failed to load library. Click "Load Model" to retry.', false);
             showAlert('Failed to load Transformers.js library. Please check your internet connection and refresh.', 'error');
             if (els.loadModelBtn) {
                 els.loadModelBtn.style.display = 'inline-block';
@@ -634,8 +657,8 @@ function initializeApp() {
         }
     };
     
-    // Start checking after a short delay
-    setTimeout(checkAndLoad, 100);
+    // Start checking after script has had time to execute
+    setTimeout(checkAndLoad, 500);
 }
 
 
