@@ -178,16 +178,25 @@ function updateStartupModelStatus(modelIndex, status, icon = '⏳') {
 
 // Preload all models sequentially
 async function preloadAllModels() {
-    console.log('Starting to preload all models...');
+    console.log('=== preloadAllModels() CALLED ===');
+    console.log('Available models:', AVAILABLE_MODELS);
+    console.log('Pipeline available:', typeof pipeline);
+    console.log('Env available:', typeof env);
     
     // Show startup screen
     if (els.startupScreen) {
+        console.log('Showing startup screen');
         document.body.classList.add('loading');
+    } else {
+        console.error('Startup screen element not found!');
     }
+    
+    console.log('Starting model loop, count:', AVAILABLE_MODELS.length);
     
     for (let i = 0; i < AVAILABLE_MODELS.length; i++) {
         const model = AVAILABLE_MODELS[i];
         console.log(`\n=== Preloading model ${i + 1}/${AVAILABLE_MODELS.length}: ${model.name} (${model.size}) ===`);
+        console.log('Model ID:', model.id);
         
         try {
             // Update startup screen
@@ -267,10 +276,22 @@ async function preloadAllModels() {
             
         } catch (err) {
             console.error(`Failed to load ${model.name} model:`, err);
+            console.error('Error stack:', err.stack);
+            
+            // Update UI to show error
+            updateStartupModelStatus(i, `❌ Failed: ${err.message}`, '❌');
+            if (els.startupProgressText) {
+                els.startupProgressText.textContent = `Error loading ${model.name}: ${err.message}`;
+            }
+            
             showAlert(`Failed to load ${model.name} model: ${err.message}`, 'error');
-            // Continue with next model even if one fails
+            
+            // Wait a bit before continuing
+            await new Promise(resolve => setTimeout(resolve, 2000));
         }
     }
+    
+    console.log('Model loop completed');
     
     // All models loaded
     state.allModelsLoaded = true;
@@ -907,14 +928,26 @@ function initializeApp() {
         attempts++;
         
         if (initTransformers()) {
-            console.log('Transformers.js loaded, starting to preload all models...');
+            console.log('✓ Transformers.js initialized successfully');
+            console.log('✓ About to call preloadAllModels()...');
+            
             setStatus('Starting to preload all models...', true);
             els.progressText.textContent = 'This will take 3-5 minutes on first load. All models will be cached for instant use later.';
             
-            preloadAllModels().catch(err => {
-                console.error('Preload failed:', err);
+            // Call preloadAllModels
+            preloadAllModels().then(() => {
+                console.log('✓ preloadAllModels() completed successfully');
+            }).catch(err => {
+                console.error('❌ Preload failed:', err);
+                console.error('Error details:', err.stack);
                 setStatus('Model preload failed. Click "Load Model" to retry.', false);
                 els.progressText.textContent = '';
+                
+                // Show error on startup screen
+                if (els.startupProgressText) {
+                    els.startupProgressText.textContent = `Error: ${err.message}`;
+                }
+                
                 if (els.loadModelBtn) {
                     els.loadModelBtn.style.display = 'inline-block';
                 }
@@ -922,12 +955,28 @@ function initializeApp() {
         } else if (attempts < maxAttempts) {
             console.log(`Waiting for transformers.js... (attempt ${attempts}/${maxAttempts})`);
             setStatus('Loading AI library...', true);
+            
+            // Update startup screen
+            if (els.startupProgressText) {
+                els.startupProgressText.textContent = `Loading AI library... (attempt ${attempts}/${maxAttempts})`;
+            }
+            
             setTimeout(checkAndLoad, 500);
         } else {
-            console.error('Transformers.js failed to load after 20 seconds');
+            console.error('❌ Transformers.js failed to load after 20 seconds');
             console.log('Final check - window keys:', Object.keys(window).filter(k => k.toLowerCase().includes('transform')));
+            
             setStatus('Failed to load library. Click "Load Model" to retry.', false);
             showAlert('Failed to load Transformers.js library. Please check your internet connection and refresh.', 'error');
+            
+            // Update startup screen with error
+            if (els.startupModelName) {
+                els.startupModelName.textContent = '❌ Failed to Load AI Library';
+            }
+            if (els.startupProgressText) {
+                els.startupProgressText.textContent = 'Transformers.js library failed to load. Please refresh the page.';
+            }
+            
             if (els.loadModelBtn) {
                 els.loadModelBtn.style.display = 'inline-block';
             }
