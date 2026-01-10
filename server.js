@@ -9,7 +9,7 @@ app.use(express.static(__dirname));
 
 // Route for root
 app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'index-improved.html'));
+    res.sendFile(path.join(__dirname, 'index.html'));
 });
 
 // Start server
