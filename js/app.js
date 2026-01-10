@@ -93,26 +93,45 @@ async function loadModelIfNeeded() {
     }
     
     state.isProcessing = true;
+    let progressInterval = null;
     
     try {
         setStatus('Loading model: ' + modelId + ' (first time may take 1–2 minutes)…', true);
         els.progressText.textContent = 'Downloading model files...';
         els.transcribeFileBtn.disabled = true;
 
-                // Show progress bar
-                els.progressBar.style.display = 'block';
-                els.progressFill.style.width = '0%';
+        // Show progress bar
+        if (els.progressBar) {
+            els.progressBar.style.display = 'block';
+            els.progressFill.style.width = '0%';
 
-                // Simulate progress (transformers.js doesn't provide real progress)
-                const progressInterval = setInterval(() => {
-                                const currentWidth = parseFloat(els.progressFill.style.width) || 0;
-                                if (currentWidth < 90) {
-                                                    els.progressFill.style.width = (currentWidth + 2) + '%';
-                                                }
-                            }, 200);
+            // Simulate progress (transformers.js doesn't provide real progress)
+            progressInterval = setInterval(() => {
+                const currentWidth = parseFloat(els.progressFill.style.width) || 0;
+                if (currentWidth < 90) {
+                    els.progressFill.style.width = (currentWidth + 2) + '%';
+                }
+            }, 200);
+        }
+        
+        // Configure progress callback for transformers.js
+        env.backends.onnx.wasm.proxy = false;
         
         // Load with timeout
-        const loadPromise = pipeline('automatic-speech-recognition', modelId);
+        const loadPromise = pipeline('automatic-speech-recognition', modelId, {
+            progress_callback: (progress) => {
+                if (progress.status === 'progress' && progress.progress) {
+                    const percent = Math.round(progress.progress);
+                    els.progressText.textContent = `Downloading: ${percent}%`;
+                    if (els.progressFill) {
+                        els.progressFill.style.width = percent + '%';
+                    }
+                } else if (progress.status === 'done') {
+                    els.progressText.textContent = 'Loading model into memory...';
+                }
+            }
+        });
+        
         const timeoutPromise = new Promise((_, reject) => 
             setTimeout(() => reject(new Error('Model load timeout')), MODEL_LOAD_TIMEOUT)
         );
@@ -120,10 +139,18 @@ async function loadModelIfNeeded() {
         state.transcriber = await Promise.race([loadPromise, timeoutPromise]);
         state.currentModelId = modelId;
 
-                // Complete progress
-                clearInterval(progressInterval);
-                els.progressFill.style.width = '100%';
-                setTimeout(() => els.progressBar.style.display = 'none', 1000);
+        // Complete progress
+        if (progressInterval) {
+            clearInterval(progressInterval);
+        }
+        if (els.progressFill) {
+            els.progressFill.style.width = '100%';
+            setTimeout(() => {
+                if (els.progressBar) {
+                    els.progressBar.style.display = 'none';
+                }
+            }, 1000);
+        }
         
         setStatus('Model ready: ' + modelId, true);
         els.progressText.textContent = '';
@@ -138,8 +165,12 @@ async function loadModelIfNeeded() {
         state.currentModelId = null;
         setStatus('Model failed to load');
         els.progressText.textContent = '';
-                clearInterval(progressInterval);
-                els.progressBar.style.display = 'none';
+        if (progressInterval) {
+            clearInterval(progressInterval);
+        }
+        if (els.progressBar) {
+            els.progressBar.style.display = 'none';
+        }
         showAlert('Failed to load model: ' + err.message);
         throw err;
     } finally {
@@ -292,25 +323,41 @@ async function startScreenShare() {
         els.downloadBtn.disabled = true;
         els.progressText.textContent = 'Waiting for you to select what to share…';
         
+        // Request display media with audio
         const stream = await navigator.mediaDevices.getDisplayMedia({
             video: true,
-            audio: true
+            audio: {
+                echoCancellation: false,
+                noiseSuppression: false,
+                autoGainControl: false
+            }
         });
         
         // Check if audio track exists
         const audioTracks = stream.getAudioTracks();
         if (audioTracks.length === 0) {
             stream.getTracks().forEach(t => t.stop());
+            els.startShareBtn.disabled = false;
+            els.stopShareBtn.disabled = true;
+            els.progressText.textContent = '';
             throw new Error('No audio track available. Make sure to enable "Share audio" when selecting the tab/window.');
         }
+        
+        console.log('Audio track captured:', audioTracks[0].label, 'enabled:', audioTracks[0].enabled);
         
         state.shareStream = stream;
         state.shareChunks = [];
         
-        state.shareRecorder = new MediaRecorder(stream, { mimeType });
+        // Create audio-only stream for recording
+        const audioStream = new MediaStream();
+        audioTracks.forEach(track => audioStream.addTrack(track));
+        
+        // Record only audio
+        state.shareRecorder = new MediaRecorder(audioStream, { mimeType });
         
         state.shareRecorder.ondataavailable = (e) => {
             if (e.data && e.data.size > 0) {
+                console.log('Audio chunk received:', e.data.size, 'bytes');
                 state.shareChunks.push(e.data);
             }
         };
@@ -323,8 +370,13 @@ async function startScreenShare() {
                     throw new Error('No audio data captured');
                 }
                 
+                console.log('Total chunks:', state.shareChunks.length);
                 const blob = new Blob(state.shareChunks, { type: mimeType });
+                console.log('Audio blob size:', blob.size, 'bytes');
+                
                 const float32 = await blobToFloat32(blob);
+                console.log('Audio samples:', float32.length);
+                
                 els.transcript.innerHTML = '';
                 els.copyBtn.disabled = true;
                 els.downloadBtn.disabled = true;
@@ -337,22 +389,36 @@ async function startScreenShare() {
             }
         };
         
+        state.shareRecorder.onerror = (e) => {
+            console.error('MediaRecorder error:', e);
+            showAlert('Recording error: ' + e.error);
+            cleanupScreenShare();
+        };
+        
         // Handle stream ending (user stops sharing)
-        stream.getVideoTracks()[0].addEventListener('ended', () => {
-            if (state.shareRecorder && state.shareRecorder.state === 'recording') {
-                state.shareRecorder.stop();
-            }
-        });
+        const videoTrack = stream.getVideoTracks()[0];
+        if (videoTrack) {
+            videoTrack.addEventListener('ended', () => {
+                console.log('Video track ended, stopping recording');
+                if (state.shareRecorder && state.shareRecorder.state === 'recording') {
+                    state.shareRecorder.stop();
+                }
+            });
+        }
         
         setStatus('Capturing screen/tab audio…', true);
         els.progressText.textContent = 'Recording… stop when you want to transcribe.';
-        state.shareRecorder.start();
+        
+        // Start recording with timeslice for regular data chunks
+        state.shareRecorder.start(1000);
+        console.log('Recording started with mime type:', mimeType);
     } catch (err) {
         console.error('Screen share error:', err);
         cleanupScreenShare();
         
         if (err.name === 'NotAllowedError' || err.name === 'AbortError') {
             setStatus('Capture cancelled', false);
+            els.progressText.textContent = '';
         } else {
             setStatus('Capture not started');
             showAlert('Could not start screen/tab capture: ' + err.message);
@@ -467,8 +533,14 @@ function initializeApp() {
         cleanupAudioContexts();
     });
     
-    // Auto-load model on app initialization
-    loadModelIfNeeded().catch(err => console.warn('Auto-load failed:', err));}
+    // Wait for transformers.js to be ready, then auto-load model
+    setTimeout(() => {
+        if (typeof pipeline !== 'undefined') {
+            console.log('Auto-loading model...');
+            loadModelIfNeeded().catch(err => console.warn('Auto-load failed:', err));
+        }
+    }, 500);
+}
 
 
 // Start the app when DOM is ready
