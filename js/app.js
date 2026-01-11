@@ -50,10 +50,11 @@ const MAX_FILE_SIZE_MB = 500;
 const MODEL_LOAD_TIMEOUT = 300000; // 5 minutes
 
 // All available models
+// Note: Using models that are confirmed to work with transformers.js
 const AVAILABLE_MODELS = [
-    { id: 'Xenova/whisper-tiny', name: 'Tiny', size: '~40MB' },
-    { id: 'Xenova/whisper-base', name: 'Base', size: '~75MB' },
-    { id: 'Xenova/whisper-small', name: 'Small', size: '~250MB' }
+    { id: 'Xenova/whisper-tiny.en', name: 'Whisper Tiny', size: '~40MB' },
+    { id: 'Xenova/whisper-base.en', name: 'Whisper Base', size: '~75MB' },
+    { id: 'Xenova/whisper-small.en', name: 'Whisper Small', size: '~250MB' }
 ];
 
 // State management
@@ -232,32 +233,30 @@ async function preloadAllModels() {
                 }
             }, 500);
             
-            // Load the model
+            // Load the model - simplified approach
             console.log(`Attempting to load model: ${model.id}`);
             console.log('Pipeline function available:', typeof pipeline);
-            console.log('Transformers.js version: 3.0.0');
             
             let loadedModel;
             try {
-                // In v3, use explicit task for Whisper models
-                console.log('Loading with automatic-speech-recognition task...');
-                loadedModel = await pipeline('automatic-speech-recognition', model.id, {
-                    // V3 options
-                    quantized: true, // Use quantized models for smaller size
-                });
+                // Simple pipeline call - let transformers.js handle everything
+                console.log('Loading model with pipeline...');
+                loadedModel = await pipeline('automatic-speech-recognition', model.id);
                 
                 console.log(`✓ Model ${model.name} loaded successfully`);
                 console.log('Loaded model type:', typeof loadedModel);
-                console.log('Model object:', loadedModel);
                 
-                // Verify the model is actually callable
-                if (typeof loadedModel !== 'function' && typeof loadedModel !== 'object') {
-                    throw new Error(`Model loaded but is not callable (type: ${typeof loadedModel})`);
+                // Test if model is callable
+                if (!loadedModel) {
+                    throw new Error('Model loaded but is null/undefined');
                 }
+                
+                console.log('Model appears valid');
             } catch (loadErr) {
                 console.error(`❌ Failed to load ${model.name}`);
+                console.error('Error type:', loadErr.name);
                 console.error('Error message:', loadErr.message);
-                console.error('Error stack:', loadErr.stack);
+                console.error('Full error:', loadErr);
                 throw loadErr;
             }
             

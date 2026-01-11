@@ -71,9 +71,9 @@
                         Model:
                     </label>
                     <select id="modelSelect">
-                        <option value="Xenova/whisper-tiny">Tiny (~40MB, fastest)</option>
-                        <option value="Xenova/whisper-base" selected>Base (~75MB, balanced)</option>
-                        <option value="Xenova/whisper-small">Small (~250MB, most accurate)</option>
+                        <option value="Xenova/whisper-tiny.en">Whisper Tiny (~40MB, fastest)</option>
+                        <option value="Xenova/whisper-base.en" selected>Whisper Base (~75MB, balanced)</option>
+                        <option value="Xenova/whisper-small.en">Whisper Small (~250MB, most accurate)</option>
                     </select>
                 </div>
                 <span class="badge">Runs 100% in browser</span>
@@ -137,14 +137,15 @@
 </div>
 
 <script type="module">
-    // Import transformers.js as ES module - using v3.0.0 which has proper Whisper support
-    import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.0';
+    // Import transformers.js - using latest stable version
+    // Note: Whisper models may not be fully supported, using what's available
+    import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2';
     
     // Make available globally
     window.pipeline = pipeline;
     window.env = env;
     
-    console.log('Transformers.js v3.0.0 loaded as module');
+    console.log('Transformers.js loaded');
     console.log('Pipeline:', typeof pipeline);
     console.log('Env:', typeof env);
     
