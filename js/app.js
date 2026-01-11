@@ -232,23 +232,34 @@ async function preloadAllModels() {
                 }
             }, 500);
             
-            // Load the model - try without progress callback first to see if that's the issue
+            // Load the model
             console.log(`Attempting to load model: ${model.id}`);
+            console.log('Pipeline function available:', typeof pipeline);
             
             let loadedModel;
             try {
                 loadedModel = await pipeline('automatic-speech-recognition', model.id);
-                console.log(`Model ${model.name} loaded successfully`);
+                console.log(`✓ Model ${model.name} loaded successfully`);
+                console.log('Loaded model type:', typeof loadedModel);
+                
+                // Verify the model is actually a function
+                if (typeof loadedModel !== 'function') {
+                    throw new Error(`Model loaded but is not a function (type: ${typeof loadedModel})`);
+                }
             } catch (modelErr) {
-                console.error(`Failed with automatic-speech-recognition, trying alternative...`, modelErr);
-                // If that fails, the model might not be compatible
-                throw new Error(`Model ${model.id} is not compatible with this version of transformers.js: ${modelErr.message}`);
+                console.error(`❌ Failed to load ${model.name}:`, modelErr);
+                console.error('Error details:', modelErr.message);
+                console.error('Error stack:', modelErr.stack);
+                throw modelErr; // Re-throw to be caught by outer catch
             }
             
             clearInterval(progressInterval);
             
             // Store the loaded model
+            console.log(`Storing model with ID: ${model.id}`);
+            console.log('Model object type:', typeof loadedModel);
             state.loadedModels[model.id] = loadedModel;
+            console.log('Models in state after storing:', Object.keys(state.loadedModels));
             
             if (els.startupProgressFill) {
                 els.startupProgressFill.style.width = '100%';
@@ -290,6 +301,17 @@ async function preloadAllModels() {
     
     console.log('\n=== All models preloaded successfully ===');
     console.log('Loaded models:', Object.keys(state.loadedModels));
+    console.log('Total models loaded:', Object.keys(state.loadedModels).length);
+    
+    // Verify at least one model loaded
+    if (Object.keys(state.loadedModels).length === 0) {
+        console.error('❌ No models were loaded successfully!');
+        if (els.startupProgressText) {
+            els.startupProgressText.textContent = 'No models loaded. Please refresh and try again.';
+        }
+        showAlert('Failed to load any models. Please refresh the page.', 'error');
+        return;
+    }
     
     // Update startup screen
     if (els.startupModelName) {
