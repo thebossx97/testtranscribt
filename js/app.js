@@ -31,13 +31,17 @@ function initTransformers() {
     
     try {
         // Configure transformers.js
-        env.allowLocalModels = true;
+        // CRITICAL: Set allowLocalModels to FALSE to force CDN loading
+        // This fixes the "Unsupported model type" error
+        env.allowLocalModels = false;
         env.backends.onnx.wasm.numThreads = navigator.hardwareConcurrency || 4;
         env.backends.onnx.wasm.proxy = false;
         
-        console.log('Transformers.js initialized successfully');
-        console.log('Pipeline type:', typeof pipeline);
-        console.log('Env type:', typeof env);
+        console.log('✓ Transformers.js configured:');
+        console.log('  - allowLocalModels:', env.allowLocalModels);
+        console.log('  - WASM threads:', env.backends.onnx.wasm.numThreads);
+        console.log('  - Pipeline type:', typeof pipeline);
+        console.log('  - Env type:', typeof env);
         return true;
     } catch (err) {
         console.error('Error configuring transformers.js:', err);
@@ -233,30 +237,46 @@ async function preloadAllModels() {
                 }
             }, 500);
             
-            // Load the model - simplified approach
-            console.log(`Attempting to load model: ${model.id}`);
-            console.log('Pipeline function available:', typeof pipeline);
+            // Load the model with proper configuration
+            console.log(`\nAttempting to load model: ${model.id}`);
+            console.log('Pipeline available:', typeof pipeline);
+            console.log('env.allowLocalModels:', env.allowLocalModels);
             
             let loadedModel;
             try {
-                // Simple pipeline call - let transformers.js handle everything
-                console.log('Loading model with pipeline...');
-                loadedModel = await pipeline('automatic-speech-recognition', model.id);
+                // Load with proper options for Whisper models
+                console.log('Loading with automatic-speech-recognition pipeline...');
+                loadedModel = await pipeline('automatic-speech-recognition', model.id, {
+                    quantized: true, // Use quantized models for smaller size
+                    progress_callback: (progress) => {
+                        if (progress.status === 'progress' && progress.progress !== undefined) {
+                            const percent = Math.round(progress.progress);
+                            simulatedProgress = percent;
+                            hasRealProgress = true;
+                            
+                            if (els.startupProgressFill) {
+                                els.startupProgressFill.style.width = percent + '%';
+                            }
+                            const elapsed = Math.floor((Date.now() - startTime) / 1000);
+                            if (els.startupProgressText) {
+                                els.startupProgressText.textContent = `Downloading ${model.name}: ${percent}% (${elapsed}s)`;
+                            }
+                            updateStartupModelStatus(i, `${percent}% (${elapsed}s)`, '📥');
+                        }
+                    }
+                });
                 
                 console.log(`✓ Model ${model.name} loaded successfully`);
-                console.log('Loaded model type:', typeof loadedModel);
+                console.log('Model type:', typeof loadedModel);
                 
-                // Test if model is callable
                 if (!loadedModel) {
-                    throw new Error('Model loaded but is null/undefined');
+                    throw new Error('Model is null/undefined after loading');
                 }
                 
-                console.log('Model appears valid');
             } catch (loadErr) {
                 console.error(`❌ Failed to load ${model.name}`);
-                console.error('Error type:', loadErr.name);
-                console.error('Error message:', loadErr.message);
-                console.error('Full error:', loadErr);
+                console.error('Error:', loadErr.message);
+                console.error('Stack:', loadErr.stack);
                 throw loadErr;
             }
             
