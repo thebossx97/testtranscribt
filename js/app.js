@@ -235,32 +235,30 @@ async function preloadAllModels() {
             // Load the model
             console.log(`Attempting to load model: ${model.id}`);
             console.log('Pipeline function available:', typeof pipeline);
+            console.log('Transformers.js version: 3.0.0');
             
             let loadedModel;
             try {
-                // Try loading without specifying task - let it auto-detect
-                console.log('Trying to load model without task specification...');
-                loadedModel = await pipeline(model.id);
-                console.log(`✓ Model ${model.name} loaded successfully (auto-detect)`);
+                // In v3, use explicit task for Whisper models
+                console.log('Loading with automatic-speech-recognition task...');
+                loadedModel = await pipeline('automatic-speech-recognition', model.id, {
+                    // V3 options
+                    quantized: true, // Use quantized models for smaller size
+                });
+                
+                console.log(`✓ Model ${model.name} loaded successfully`);
                 console.log('Loaded model type:', typeof loadedModel);
+                console.log('Model object:', loadedModel);
                 
-                // Verify the model is actually a function
-                if (typeof loadedModel !== 'function') {
-                    throw new Error(`Model loaded but is not a function (type: ${typeof loadedModel})`);
+                // Verify the model is actually callable
+                if (typeof loadedModel !== 'function' && typeof loadedModel !== 'object') {
+                    throw new Error(`Model loaded but is not callable (type: ${typeof loadedModel})`);
                 }
-            } catch (autoErr) {
-                console.warn('Auto-detect failed, trying with explicit task...', autoErr.message);
-                
-                // If auto-detect fails, try with explicit task
-                try {
-                    loadedModel = await pipeline('automatic-speech-recognition', model.id);
-                    console.log(`✓ Model ${model.name} loaded successfully (explicit task)`);
-                } catch (explicitErr) {
-                    console.error(`❌ Both methods failed for ${model.name}`);
-                    console.error('Auto-detect error:', autoErr.message);
-                    console.error('Explicit task error:', explicitErr.message);
-                    throw explicitErr;
-                }
+            } catch (loadErr) {
+                console.error(`❌ Failed to load ${model.name}`);
+                console.error('Error message:', loadErr.message);
+                console.error('Error stack:', loadErr.stack);
+                throw loadErr;
             }
             
             clearInterval(progressInterval);
