@@ -74,7 +74,12 @@ const state = {
     shareChunks: [],
     audioContexts: [], // Track for cleanup
     loadedModels: {}, // Cache for preloaded models
-    allModelsLoaded: false
+    allModelsLoaded: false,
+    // Live transcription state
+    isLiveTranscribing: false,
+    liveTranscriptChunks: [],
+    lastProcessedChunkIndex: 0,
+    liveProcessingInterval: null
 };
 
 // Helper to check if any operation is in progress
@@ -670,6 +675,74 @@ async function fileToFloat32(file) {
     }
 }
 
+// Process live audio chunks for real-time transcription
+async function processLiveChunk() {
+    if (!state.isLiveTranscribing || state.isTranscribing) {
+        return;
+    }
+    
+    // Check if we have new chunks to process
+    if (state.lastProcessedChunkIndex >= state.shareChunks.length) {
+        return;
+    }
+    
+    try {
+        state.isTranscribing = true;
+        
+        // Get all chunks up to now
+        const chunksToProcess = state.shareChunks.slice(state.lastProcessedChunkIndex);
+        if (chunksToProcess.length === 0) {
+            state.isTranscribing = false;
+            return;
+        }
+        
+        console.log(`Processing ${chunksToProcess.length} new audio chunks for live transcription`);
+        
+        // Combine chunks into a blob
+        const blob = new Blob(chunksToProcess, { type: chunksToProcess[0].type });
+        
+        // Convert to audio data
+        const float32Data = await blobToFloat32(blob);
+        
+        // Transcribe this chunk
+        if (!state.transcriber) {
+            console.warn('Transcriber not available');
+            state.isTranscribing = false;
+            return;
+        }
+        
+        console.log('Transcribing live chunk...');
+        const result = await state.transcriber(float32Data, {
+            chunk_length_s: 30,
+            stride_length_s: 5,
+            return_timestamps: false
+        });
+        
+        const newText = result.text || '';
+        console.log('Live chunk transcribed:', newText.substring(0, 50) + '...');
+        
+        // Append to transcript
+        if (newText.trim()) {
+            state.liveTranscriptChunks.push(newText);
+            state.currentTranscript = state.liveTranscriptChunks.join(' ');
+            
+            // Update display
+            els.transcript.textContent = state.currentTranscript;
+            
+            // Auto-scroll to bottom
+            els.transcript.scrollTop = els.transcript.scrollHeight;
+        }
+        
+        // Mark these chunks as processed
+        state.lastProcessedChunkIndex = state.shareChunks.length;
+        
+    } catch (err) {
+        console.error('Error processing live chunk:', err);
+    } finally {
+        state.isTranscribing = false;
+    }
+}
+
 async function transcribeFloat32(float32Data) {
     if (state.isTranscribing) {
         console.warn('Transcription already in progress');
@@ -826,6 +899,13 @@ async function startScreenShare() {
         
         state.shareStream = stream;
         state.shareChunks = [];
+        state.liveTranscriptChunks = [];
+        state.lastProcessedChunkIndex = 0;
+        state.isLiveTranscribing = true;
+        
+        // Clear transcript for live updates
+        els.transcript.innerHTML = '<em style="color: var(--color-gray-400);">Listening... speak to see live transcription</em>';
+        state.currentTranscript = '';
         
         // Create audio-only stream for recording
         const audioStream = new MediaStream();
@@ -838,28 +918,61 @@ async function startScreenShare() {
             if (e.data && e.data.size > 0) {
                 console.log('Audio chunk received:', e.data.size, 'bytes');
                 state.shareChunks.push(e.data);
+                
+                // Trigger live processing for this chunk
+                if (state.isLiveTranscribing) {
+                    processLiveChunk().catch(err => {
+                        console.error('Live processing error:', err);
+                    });
+                }
             }
         };
         
         state.shareRecorder.onstop = async () => {
             try {
-                els.progressText.textContent = 'Processing captured audio…';
+                // Stop live transcription
+                state.isLiveTranscribing = false;
                 
                 if (state.shareChunks.length === 0) {
                     throw new Error('No audio data captured');
                 }
                 
-                console.log('Total chunks:', state.shareChunks.length);
-                const blob = new Blob(state.shareChunks, { type: mimeType });
-                console.log('Audio blob size:', blob.size, 'bytes');
+                console.log('Recording stopped. Total chunks:', state.shareChunks.length);
                 
-                const float32 = await blobToFloat32(blob);
-                console.log('Audio samples:', float32.length);
+                // Check if we have any unprocessed chunks
+                const unprocessedChunks = state.shareChunks.slice(state.lastProcessedChunkIndex);
                 
-                els.transcript.innerHTML = '';
-                els.copyBtn.disabled = true;
-                els.downloadBtn.disabled = true;
-                await transcribeFloat32(float32);
+                if (unprocessedChunks.length > 0) {
+                    console.log('Processing final', unprocessedChunks.length, 'chunks...');
+                    els.progressText.textContent = 'Processing final audio chunks…';
+                    
+                    const blob = new Blob(unprocessedChunks, { type: mimeType });
+                    const float32 = await blobToFloat32(blob);
+                    
+                    // Transcribe final chunks
+                    const result = await state.transcriber(float32, {
+                        chunk_length_s: 30,
+                        stride_length_s: 5,
+                        return_timestamps: false
+                    });
+                    
+                    const finalText = result.text || '';
+                    if (finalText.trim()) {
+                        state.liveTranscriptChunks.push(finalText);
+                        state.currentTranscript = state.liveTranscriptChunks.join(' ');
+                        els.transcript.textContent = state.currentTranscript;
+                    }
+                }
+                
+                els.progressText.textContent = 'Live transcription complete';
+                setStatus('Transcription complete', false);
+                
+                // Enable copy/download if we have text
+                if (state.currentTranscript.trim()) {
+                    els.copyBtn.disabled = false;
+                    els.downloadBtn.disabled = false;
+                }
+                
             } catch (err) {
                 console.error('Capture processing error:', err);
                 showAlert('Error processing captured audio: ' + err.message);
@@ -885,12 +998,12 @@ async function startScreenShare() {
             });
         }
         
-        setStatus('Capturing screen/tab audio…', true);
-        els.progressText.textContent = 'Recording… stop when you want to transcribe.';
+        setStatus('Live transcription active…', true);
+        els.progressText.textContent = '🔴 Recording with live transcription - speak to see text appear in real-time';
         
-        // Start recording with timeslice for regular data chunks
-        state.shareRecorder.start(1000);
-        console.log('Recording started with mime type:', mimeType);
+        // Start recording with timeslice for regular data chunks (every 3 seconds for live processing)
+        state.shareRecorder.start(3000); // Process every 3 seconds
+        console.log('Live transcription started with mime type:', mimeType);
     } catch (err) {
         console.error('Screen share error:', err);
         cleanupScreenShare();
@@ -906,6 +1019,11 @@ async function startScreenShare() {
 }
 
 function cleanupScreenShare() {
+    // Stop live transcription
+    state.isLiveTranscribing = false;
+    state.liveTranscriptChunks = [];
+    state.lastProcessedChunkIndex = 0;
+    
     if (state.shareStream) {
         state.shareStream.getTracks().forEach(t => t.stop());
         state.shareStream = null;
