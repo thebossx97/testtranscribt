@@ -54,11 +54,35 @@ const MAX_FILE_SIZE_MB = 500;
 const MODEL_LOAD_TIMEOUT = 300000; // 5 minutes
 
 // All available models
-// Note: Using models that are confirmed to work with transformers.js
+// Using multilingual models for language support
 const AVAILABLE_MODELS = [
-    { id: 'Xenova/whisper-tiny.en', name: 'Whisper Tiny', size: '~40MB' },
-    { id: 'Xenova/whisper-base.en', name: 'Whisper Base', size: '~75MB' },
-    { id: 'Xenova/whisper-small.en', name: 'Whisper Small', size: '~250MB' }
+    { id: 'Xenova/whisper-tiny', name: 'Whisper Tiny', size: '~75MB', multilingual: true },
+    { id: 'Xenova/whisper-base', name: 'Whisper Base', size: '~145MB', multilingual: true },
+    { id: 'Xenova/whisper-small', name: 'Whisper Small', size: '~490MB', multilingual: true }
+];
+
+// Common languages for Whisper
+const LANGUAGES = [
+    { code: null, name: 'Auto-detect' },
+    { code: 'en', name: 'English' },
+    { code: 'es', name: 'Spanish' },
+    { code: 'fr', name: 'French' },
+    { code: 'de', name: 'German' },
+    { code: 'it', name: 'Italian' },
+    { code: 'pt', name: 'Portuguese' },
+    { code: 'nl', name: 'Dutch' },
+    { code: 'ru', name: 'Russian' },
+    { code: 'zh', name: 'Chinese' },
+    { code: 'ja', name: 'Japanese' },
+    { code: 'ko', name: 'Korean' },
+    { code: 'ar', name: 'Arabic' },
+    { code: 'hi', name: 'Hindi' },
+    { code: 'tr', name: 'Turkish' },
+    { code: 'pl', name: 'Polish' },
+    { code: 'uk', name: 'Ukrainian' },
+    { code: 'vi', name: 'Vietnamese' },
+    { code: 'th', name: 'Thai' },
+    { code: 'sv', name: 'Swedish' }
 ];
 
 // State management
@@ -94,6 +118,7 @@ const els = {
     statusText: document.getElementById('statusText'),
     loadModelBtn: document.getElementById('loadModelBtn'),
     modelSelect: document.getElementById('modelSelect'),
+    languageSelect: document.getElementById('languageSelect'),
     fileInput: document.getElementById('fileInput'),
     selectFileBtn: document.getElementById('selectFileBtn'),
     fileName: document.getElementById('fileName'),
@@ -712,11 +737,24 @@ async function processLiveChunk() {
         }
         
         console.log('Transcribing new audio chunk...');
-        const result = await state.transcriber(float32Data, {
+        
+        // Get selected language
+        const language = els.languageSelect ? els.languageSelect.value : null;
+        const options = {
             chunk_length_s: 30,
             stride_length_s: 5,
             return_timestamps: false
-        });
+        };
+        
+        // Add language if specified (null = auto-detect)
+        if (language) {
+            options.language = language;
+            console.log('Using language:', language);
+        } else {
+            console.log('Using auto-detect language');
+        }
+        
+        const result = await state.transcriber(float32Data, options);
         
         const newText = result.text || '';
         console.log('New text:', newText.substring(0, 100));
@@ -777,12 +815,24 @@ async function transcribeFloat32(float32Data) {
         els.progressText.textContent = 'Running Whisper model in browser…';
         setStatus('Transcribing…', true);
         
-        // Call the transcriber with proper format
-        const result = await state.transcriber(float32Data, {
+        // Get selected language
+        const language = els.languageSelect ? els.languageSelect.value : null;
+        const options = {
             chunk_length_s: 30,
             stride_length_s: 5,
             return_timestamps: false
-        });
+        };
+        
+        // Add language if specified
+        if (language) {
+            options.language = language;
+            console.log('Transcribing with language:', language);
+        } else {
+            console.log('Transcribing with auto-detect');
+        }
+        
+        // Call the transcriber with proper format
+        const result = await state.transcriber(float32Data, options);
         
         console.log('Transcription result:', result);
         
