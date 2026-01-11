@@ -238,19 +238,29 @@ async function preloadAllModels() {
             
             let loadedModel;
             try {
-                loadedModel = await pipeline('automatic-speech-recognition', model.id);
-                console.log(`✓ Model ${model.name} loaded successfully`);
+                // Try loading without specifying task - let it auto-detect
+                console.log('Trying to load model without task specification...');
+                loadedModel = await pipeline(model.id);
+                console.log(`✓ Model ${model.name} loaded successfully (auto-detect)`);
                 console.log('Loaded model type:', typeof loadedModel);
                 
                 // Verify the model is actually a function
                 if (typeof loadedModel !== 'function') {
                     throw new Error(`Model loaded but is not a function (type: ${typeof loadedModel})`);
                 }
-            } catch (modelErr) {
-                console.error(`❌ Failed to load ${model.name}:`, modelErr);
-                console.error('Error details:', modelErr.message);
-                console.error('Error stack:', modelErr.stack);
-                throw modelErr; // Re-throw to be caught by outer catch
+            } catch (autoErr) {
+                console.warn('Auto-detect failed, trying with explicit task...', autoErr.message);
+                
+                // If auto-detect fails, try with explicit task
+                try {
+                    loadedModel = await pipeline('automatic-speech-recognition', model.id);
+                    console.log(`✓ Model ${model.name} loaded successfully (explicit task)`);
+                } catch (explicitErr) {
+                    console.error(`❌ Both methods failed for ${model.name}`);
+                    console.error('Auto-detect error:', autoErr.message);
+                    console.error('Explicit task error:', explicitErr.message);
+                    throw explicitErr;
+                }
             }
             
             clearInterval(progressInterval);
@@ -278,7 +288,8 @@ async function preloadAllModels() {
             await new Promise(resolve => setTimeout(resolve, 800));
             
         } catch (err) {
-            console.error(`Failed to load ${model.name} model:`, err);
+            console.error(`❌ Failed to load ${model.name} model:`, err);
+            console.error('Error message:', err.message);
             console.error('Error stack:', err.stack);
             
             // Update UI to show error
@@ -287,10 +298,15 @@ async function preloadAllModels() {
                 els.startupProgressText.textContent = `Error loading ${model.name}: ${err.message}`;
             }
             
-            showAlert(`Failed to load ${model.name} model: ${err.message}`, 'error');
+            // Don't continue if model fails - this is critical
+            if (els.startupModelName) {
+                els.startupModelName.textContent = `❌ Failed to Load ${model.name} Model`;
+            }
             
-            // Wait a bit before continuing
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            showAlert(`Critical error: ${model.name} model failed to load. ${err.message}`, 'error');
+            
+            // Stop here - don't continue loading other models if one fails
+            throw new Error(`Model loading failed: ${err.message}`);
         }
     }
     
