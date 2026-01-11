@@ -689,43 +689,46 @@ async function processLiveChunk() {
     try {
         state.isTranscribing = true;
         
-        // IMPORTANT: Process ALL chunks from the beginning each time
-        // This ensures we have complete, decodable audio
-        // We'll only show the NEW text by tracking what we've already displayed
-        const allChunks = state.shareChunks;
-        if (allChunks.length === 0) {
+        // Get only NEW chunks since last processing
+        const newChunks = state.shareChunks.slice(state.lastProcessedChunkIndex);
+        if (newChunks.length === 0) {
             state.isTranscribing = false;
             return;
         }
         
-        console.log(`Processing all ${allChunks.length} chunks (last processed: ${state.lastProcessedChunkIndex})`);
+        console.log(`Processing ${newChunks.length} new chunks (${state.lastProcessedChunkIndex} already processed)`);
         
-        // Combine ALL chunks into a complete audio blob
-        const blob = new Blob(allChunks, { type: allChunks[0].type });
+        // Combine only NEW chunks into a blob
+        const blob = new Blob(newChunks, { type: newChunks[0].type });
         
         // Convert to audio data
         const float32Data = await blobToFloat32(blob);
         
-        // Transcribe the complete audio so far
+        // Transcribe only the NEW audio
         if (!state.transcriber) {
             console.warn('Transcriber not available');
             state.isTranscribing = false;
             return;
         }
         
-        console.log('Transcribing complete audio so far...');
+        console.log('Transcribing new audio chunk...');
         const result = await state.transcriber(float32Data, {
             chunk_length_s: 30,
             stride_length_s: 5,
             return_timestamps: false
         });
         
-        const fullText = result.text || '';
-        console.log('Transcribed text length:', fullText.length);
+        const newText = result.text || '';
+        console.log('New text:', newText.substring(0, 100));
         
-        // Update transcript with complete text
-        if (fullText.trim()) {
-            state.currentTranscript = fullText;
+        // Append new text to existing transcript
+        if (newText.trim()) {
+            // Add space if we already have text
+            if (state.currentTranscript.trim()) {
+                state.currentTranscript += ' ' + newText;
+            } else {
+                state.currentTranscript = newText;
+            }
             
             // Update display
             els.transcript.textContent = state.currentTranscript;
@@ -734,12 +737,13 @@ async function processLiveChunk() {
             els.transcript.scrollTop = els.transcript.scrollHeight;
         }
         
-        // Mark current position as processed
+        // Mark these chunks as processed
         state.lastProcessedChunkIndex = state.shareChunks.length;
         
     } catch (err) {
         console.error('Error processing live chunk:', err);
-        // Don't stop live transcription on error, just skip this chunk
+        // If decode fails, it might be incomplete chunk - wait for next one
+        console.log('Will retry with next chunk batch');
     } finally {
         state.isTranscribing = false;
     }
@@ -1001,9 +1005,10 @@ async function startScreenShare() {
         setStatus('Live transcription active…', true);
         els.progressText.textContent = '🔴 Recording with live transcription - speak to see text appear in real-time';
         
-        // Start recording with timeslice for regular data chunks (every 3 seconds for live processing)
-        state.shareRecorder.start(3000); // Process every 3 seconds
-        console.log('Live transcription started with mime type:', mimeType);
+        // Start recording with timeslice for regular data chunks
+        // 5 seconds gives enough audio for reliable decoding and transcription
+        state.shareRecorder.start(5000);
+        console.log('Live transcription started (5s chunks) with mime type:', mimeType);
     } catch (err) {
         console.error('Screen share error:', err);
         cleanupScreenShare();
