@@ -304,14 +304,28 @@ async function preloadAllModels() {
     
     // Set the default model
     const defaultModelId = els.modelSelect.value;
+    console.log('Setting default model:', defaultModelId);
+    console.log('Available loaded models:', Object.keys(state.loadedModels));
+    
     if (state.loadedModels[defaultModelId]) {
         state.transcriber = state.loadedModels[defaultModelId];
         state.currentModelId = defaultModelId;
+        console.log('✓ Default model set:', defaultModelId);
+    } else {
+        console.warn('Default model not found in loaded models!');
+        // Use the first loaded model as fallback
+        const firstModelId = Object.keys(state.loadedModels)[0];
+        if (firstModelId) {
+            state.transcriber = state.loadedModels[firstModelId];
+            state.currentModelId = firstModelId;
+            console.log('Using fallback model:', firstModelId);
+        }
     }
     
-    // Enable transcribe button if file is selected
-    if (state.selectedFile) {
+    // Enable transcribe button if file is selected and model is ready
+    if (state.selectedFile && state.transcriber) {
         els.transcribeFileBtn.disabled = false;
+        console.log('✓ Transcribe button enabled');
     }
     
     // Hide startup screen with fade out
@@ -321,8 +335,13 @@ async function preloadAllModels() {
         }
         document.body.classList.remove('loading');
         
-        setStatus('Ready to transcribe', false);
+        // Show which model is active
+        const activeModelName = state.currentModelId ? state.currentModelId.split('/')[1] : 'unknown';
+        setStatus(`Ready with ${activeModelName} model`, false);
         showAlert('All models loaded successfully! Ready to transcribe.', 'success');
+        
+        console.log('App ready. Active model:', state.currentModelId);
+        console.log('Transcriber available:', !!state.transcriber);
     }, 1500);
 }
 
@@ -894,20 +913,27 @@ function handleFileSelect(e) {
 function handleModelChange() {
     const newModelId = els.modelSelect.value;
     console.log('Model changed to:', newModelId);
+    console.log('Available models:', Object.keys(state.loadedModels));
     
     // Switch to preloaded model if available
     if (state.loadedModels[newModelId]) {
         state.transcriber = state.loadedModels[newModelId];
         state.currentModelId = newModelId;
-        setStatus(`Switched to ${newModelId.split('/')[1]} model`, false);
-        console.log('Switched to preloaded model:', newModelId);
+        const modelName = newModelId.split('/')[1];
+        setStatus(`Ready with ${modelName} model`, false);
+        console.log('✓ Switched to preloaded model:', newModelId);
+        
+        // Enable transcribe button if file is selected
+        if (state.selectedFile && !isAnyOperationInProgress()) {
+            els.transcribeFileBtn.disabled = false;
+        }
     } else {
+        console.warn('Model not found in preloaded models:', newModelId);
         state.transcriber = null;
         state.currentModelId = null;
-        setStatus('Model will load on next use.', false);
+        setStatus('Model not preloaded. Please refresh the page.', false);
+        els.transcribeFileBtn.disabled = true;
     }
-    
-    els.transcribeFileBtn.disabled = !state.selectedFile || isAnyOperationInProgress();
 }
 
 async function handleCopy() {
