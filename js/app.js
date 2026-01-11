@@ -51,8 +51,8 @@ const MODEL_LOAD_TIMEOUT = 300000; // 5 minutes
 
 // All available models
 const AVAILABLE_MODELS = [
-    { id: 'Xenova/whisper-tiny.en', name: 'Tiny', size: '~40MB' },
-    { id: 'Xenova/whisper-base.en', name: 'Base', size: '~75MB' },
+    { id: 'Xenova/whisper-tiny', name: 'Tiny', size: '~40MB' },
+    { id: 'Xenova/whisper-base', name: 'Base', size: '~75MB' },
     { id: 'Xenova/whisper-small', name: 'Small', size: '~250MB' }
 ];
 
@@ -232,26 +232,18 @@ async function preloadAllModels() {
                 }
             }, 500);
             
-            // Load the model
-            const loadedModel = await pipeline('automatic-speech-recognition', model.id, {
-                progress_callback: (progress) => {
-                    console.log(`${model.name} progress:`, progress);
-                    hasRealProgress = true;
-                    
-                    if (progress.status === 'progress' && progress.progress !== undefined) {
-                        const percent = Math.round(progress.progress);
-                        simulatedProgress = percent;
-                        if (els.startupProgressFill) {
-                            els.startupProgressFill.style.width = percent + '%';
-                        }
-                        const elapsed = Math.floor((Date.now() - startTime) / 1000);
-                        if (els.startupProgressText) {
-                            els.startupProgressText.textContent = `Downloading ${model.name}: ${percent}% (${elapsed}s)`;
-                        }
-                        updateStartupModelStatus(i, `${percent}% (${elapsed}s)`, '📥');
-                    }
-                }
-            });
+            // Load the model - try without progress callback first to see if that's the issue
+            console.log(`Attempting to load model: ${model.id}`);
+            
+            let loadedModel;
+            try {
+                loadedModel = await pipeline('automatic-speech-recognition', model.id);
+                console.log(`Model ${model.name} loaded successfully`);
+            } catch (modelErr) {
+                console.error(`Failed with automatic-speech-recognition, trying alternative...`, modelErr);
+                // If that fails, the model might not be compatible
+                throw new Error(`Model ${model.id} is not compatible with this version of transformers.js: ${modelErr.message}`);
+            }
             
             clearInterval(progressInterval);
             

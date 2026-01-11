@@ -71,9 +71,9 @@
                         Model:
                     </label>
                     <select id="modelSelect">
-                        <option value="Xenova/whisper-tiny.en">Tiny (~40MB, fastest, English)</option>
-                        <option value="Xenova/whisper-base.en" selected>Base (~75MB, balanced, English)</option>
-                        <option value="Xenova/whisper-small">Small (~250MB, accurate, multi-lang)</option>
+                        <option value="Xenova/whisper-tiny">Tiny (~40MB, fastest)</option>
+                        <option value="Xenova/whisper-base" selected>Base (~75MB, balanced)</option>
+                        <option value="Xenova/whisper-small">Small (~250MB, most accurate)</option>
                     </select>
                 </div>
                 <span class="badge">Runs 100% in browser</span>
@@ -137,8 +137,8 @@
 </div>
 
 <script type="module">
-    // Import transformers.js as ES module
-    import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.6.2/dist/transformers.min.js';
+    // Import transformers.js as ES module - using latest version for better Whisper support
+    import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2/dist/transformers.min.js';
     
     // Make available globally
     window.pipeline = pipeline;
