@@ -790,7 +790,9 @@ async function processLiveChunk() {
         console.log('Will retry on next interval');
     } finally {
         state.isTranscribing = false;
-        console.log('=== Live processing complete ===\n');
+        console.log('=== Live processing complete ===');
+        console.log('State: isTranscribing =', state.isTranscribing, 'isLiveTranscribing =', state.isLiveTranscribing);
+        console.log('Next processing in 10 seconds...\n');
     }
 }
 
@@ -979,17 +981,33 @@ async function startScreenShare() {
         
         state.shareRecorder.ondataavailable = (e) => {
             if (e.data && e.data.size > 0) {
-                console.log('Audio chunk received:', e.data.size, 'bytes', 'Total chunks:', state.shareChunks.length + 1);
+                const chunkNum = state.shareChunks.length + 1;
+                console.log('📦 Audio chunk received:', e.data.size, 'bytes', 'Total chunks:', chunkNum);
                 state.shareChunks.push(e.data);
+                
+                // Process first chunk immediately for instant feedback
+                if (chunkNum === 1) {
+                    console.log('📦 First chunk - processing immediately for instant feedback');
+                    setTimeout(() => {
+                        processLiveChunk().catch(err => {
+                            console.error('First chunk processing error:', err);
+                        });
+                    }, 100);
+                }
             }
         };
         
         // Process complete audio every 10 seconds
+        console.log('⏰ Setting up 10-second interval for live processing');
         state.liveProcessInterval = setInterval(() => {
+            console.log('⏰ Interval fired! isLiveTranscribing:', state.isLiveTranscribing, 'chunks:', state.shareChunks.length);
             if (state.isLiveTranscribing && state.shareChunks.length > 0) {
+                console.log('⏰ Triggering processLiveChunk...');
                 processLiveChunk().catch(err => {
                     console.error('Live processing error:', err);
                 });
+            } else {
+                console.log('⏰ Skipping - not ready yet');
             }
         }, 10000);
         
@@ -1075,7 +1093,9 @@ async function startScreenShare() {
         // Start recording with timeslice for regular data chunks
         // 5 seconds gives enough audio for reliable decoding and transcription
         state.shareRecorder.start(5000);
-        console.log('Live transcription started (5s chunks) with mime type:', mimeType);
+        console.log('🎙️ Live transcription started (5s chunks) with mime type:', mimeType);
+        console.log('🎙️ Interval ID:', state.liveProcessInterval);
+        console.log('🎙️ First processing will happen in 10 seconds...');
     } catch (err) {
         console.error('Screen share error:', err);
         cleanupScreenShare();
