@@ -112,7 +112,10 @@ const state = {
     speakerColors: [             // Visual speaker distinction
         '#3b82f6', '#10b981', '#f59e0b', '#ef4444', 
         '#8b5cf6', '#ec4899', '#14b8a6', '#f97316'
-    ]
+    ],
+    // Meeting management
+    currentMeeting: null,
+    meetingDB: null
 };
 
 // Helper to check if any operation is in progress
@@ -136,6 +139,7 @@ const els = {
     stopShareBtn: document.getElementById('stopShareBtn'),
     copyBtn: document.getElementById('copyBtn'),
     downloadBtn: document.getElementById('downloadBtn'),
+    saveMeetingBtn: document.getElementById('saveMeetingBtn'),
     progressText: document.getElementById('progressText'),
     progressBar: document.getElementById('progressBar'),
     progressFill: document.getElementById('progressFill'),
@@ -826,6 +830,7 @@ async function transcribeUtteranceWithDiarization(audioFloat32, startTime, featu
         // Enable export buttons
         els.copyBtn.disabled = false;
         els.downloadBtn.disabled = false;
+        els.saveMeetingBtn.disabled = false;
         
         console.log(`✅ Speaker ${speakerId + 1}: "${text}"`);
         
@@ -1425,6 +1430,7 @@ function initializeApp() {
     els.stopShareBtn.addEventListener('click', stopScreenShare);
     els.copyBtn.addEventListener('click', handleCopy);
     els.downloadBtn.addEventListener('click', handleDownload);
+    els.saveMeetingBtn.addEventListener('click', saveCurrentMeeting);
     
     // Manual model load button
     if (els.loadModelBtn) {
@@ -1511,9 +1517,158 @@ function initializeApp() {
 }
 
 
+// ==================== INDEXEDDB MEETING PERSISTENCE ====================
+
+// Initialize IndexedDB
+async function initMeetingDB() {
+    return new Promise((resolve, reject) => {
+        const request = indexedDB.open('TranscriptMeetings', 1);
+        
+        request.onerror = () => {
+            console.error('Failed to open IndexedDB:', request.error);
+            reject(request.error);
+        };
+        
+        request.onsuccess = () => {
+            state.meetingDB = request.result;
+            console.log('✅ IndexedDB initialized');
+            resolve(state.meetingDB);
+        };
+        
+        request.onupgradeneeded = (event) => {
+            const db = event.target.result;
+            
+            if (!db.objectStoreNames.contains('meetings')) {
+                const store = db.createObjectStore('meetings', { keyPath: 'id' });
+                store.createIndex('startTime', 'startTime', { unique: false });
+                store.createIndex('title', 'title', { unique: false });
+                console.log('📦 Created meetings object store');
+            }
+        };
+    });
+}
+
+// Save meeting to IndexedDB
+async function saveMeetingToDB(meeting) {
+    if (!state.meetingDB) await initMeetingDB();
+    
+    return new Promise((resolve, reject) => {
+        const transaction = state.meetingDB.transaction(['meetings'], 'readwrite');
+        const store = transaction.objectStore('meetings');
+        const request = store.put(meeting);
+        
+        request.onsuccess = () => {
+            console.log('💾 Meeting saved:', meeting.title);
+            resolve();
+        };
+        request.onerror = () => {
+            console.error('Failed to save meeting:', request.error);
+            reject(request.error);
+        };
+    });
+}
+
+// Load all meetings from IndexedDB
+async function loadMeetingsFromDB() {
+    if (!state.meetingDB) await initMeetingDB();
+    
+    return new Promise((resolve, reject) => {
+        const transaction = state.meetingDB.transaction(['meetings'], 'readonly');
+        const store = transaction.objectStore('meetings');
+        const index = store.index('startTime');
+        const request = index.openCursor(null, 'prev'); // Newest first
+        
+        const meetings = [];
+        request.onsuccess = (event) => {
+            const cursor = event.target.result;
+            if (cursor) {
+                meetings.push(cursor.value);
+                cursor.continue();
+            } else {
+                console.log(`📂 Loaded ${meetings.length} meetings`);
+                resolve(meetings);
+            }
+        };
+        request.onerror = () => {
+            console.error('Failed to load meetings:', request.error);
+            reject(request.error);
+        };
+    });
+}
+
+// Delete meeting from IndexedDB
+async function deleteMeetingFromDB(id) {
+    if (!state.meetingDB) await initMeetingDB();
+    
+    return new Promise((resolve, reject) => {
+        const transaction = state.meetingDB.transaction(['meetings'], 'readwrite');
+        const store = transaction.objectStore('meetings');
+        const request = store.delete(id);
+        
+        request.onsuccess = () => {
+            console.log('🗑️ Meeting deleted:', id);
+            resolve();
+        };
+        request.onerror = () => {
+            console.error('Failed to delete meeting:', request.error);
+            reject(request.error);
+        };
+    });
+}
+
+// Generate unique meeting ID
+function generateMeetingId() {
+    return `meeting_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
+
+// Initialize new meeting
+function initNewMeeting() {
+    state.currentMeeting = {
+        id: generateMeetingId(),
+        title: `Meeting ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}`,
+        startTime: Date.now(),
+        endTime: null,
+        speakers: [],
+        utterances: []
+    };
+    console.log('🆕 New meeting initialized:', state.currentMeeting.title);
+}
+
+// Save current meeting
+async function saveCurrentMeeting() {
+    if (!state.currentMeeting) {
+        initNewMeeting();
+    }
+    
+    if (state.utterances.length === 0) {
+        showAlert('Nothing to save yet');
+        return;
+    }
+    
+    // Update meeting data
+    state.currentMeeting.endTime = Date.now();
+    state.currentMeeting.speakers = state.speakers;
+    state.currentMeeting.utterances = state.utterances;
+    
+    try {
+        await saveMeetingToDB(state.currentMeeting);
+        showAlert(`💾 Meeting saved: "${state.currentMeeting.title}"`);
+    } catch (error) {
+        showAlert(`Failed to save meeting: ${error.message}`);
+    }
+}
+
 // Start the app when DOM is ready
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initializeApp);
+    document.addEventListener('DOMContentLoaded', async () => {
+        await initMeetingDB();
+        initNewMeeting();
+        initializeApp();
+    });
 } else {
-    initializeApp();
+    (async () => {
+        await initMeetingDB();
+        initNewMeeting();
+        initializeApp();
+    })();
 }
