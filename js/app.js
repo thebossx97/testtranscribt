@@ -706,7 +706,8 @@ async function fileToFloat32(file) {
     }
 }
 
-// Process NEW audio incrementally for efficient real-time transcription
+// Process audio with longer context windows to avoid hallucination
+// Whisper needs 15-30s of context for good results
 async function processIncrementalAudio() {
     if (!state.isLiveTranscribing || state.isTranscribing) {
         return;
@@ -714,19 +715,33 @@ async function processIncrementalAudio() {
     
     // Calculate total samples captured
     const totalSamples = state.liveAudioBuffer.reduce((sum, chunk) => sum + chunk.length, 0);
-    const newSamples = totalSamples - state.lastProcessedSampleIndex;
+    const totalDuration = totalSamples / 16000;
     
-    // Need at least 3 seconds of new audio (48000 samples at 16kHz)
-    if (newSamples < 48000) {
-        console.log(`⏭️ Only ${(newSamples/16000).toFixed(1)}s of new audio, waiting for more...`);
-        return;
+    // Need at least 15 seconds total before first transcription
+    // Then process every 10 seconds after that
+    const minInitialDuration = 15;
+    const updateInterval = 10;
+    
+    if (state.lastProcessedSampleIndex === 0) {
+        // First transcription - need minimum duration
+        if (totalDuration < minInitialDuration) {
+            console.log(`⏭️ Waiting for ${minInitialDuration}s minimum (have ${totalDuration.toFixed(1)}s)...`);
+            return;
+        }
+    } else {
+        // Subsequent updates - need enough new audio
+        const newSamples = totalSamples - state.lastProcessedSampleIndex;
+        const newDuration = newSamples / 16000;
+        if (newDuration < updateInterval) {
+            console.log(`⏭️ Only ${newDuration.toFixed(1)}s new, waiting for ${updateInterval}s...`);
+            return;
+        }
     }
     
     try {
         state.isTranscribing = true;
         
-        const newDuration = newSamples / 16000;
-        console.log(`\n🎵 Processing ${newDuration.toFixed(1)}s of NEW audio (${newSamples} samples)`);
+        console.log(`\n🎵 Processing audio: ${totalDuration.toFixed(1)}s total`);
         
         // Combine all buffer chunks into single Float32Array
         const allAudio = new Float32Array(totalSamples);
@@ -736,12 +751,26 @@ async function processIncrementalAudio() {
             offset += chunk.length;
         }
         
-        // Extract only NEW audio since last processing
-        const newAudio = allAudio.slice(state.lastProcessedSampleIndex);
+        // For first transcription, use all audio
+        // For updates, use last 30s with 10s overlap for context
+        let audioToProcess;
+        let isUpdate = false;
         
-        console.log(`📊 Total: ${(totalSamples/16000).toFixed(1)}s, Processing: ${(newAudio.length/16000).toFixed(1)}s`);
+        if (state.lastProcessedSampleIndex === 0) {
+            // First transcription - use all audio
+            audioToProcess = allAudio;
+            console.log(`📊 First transcription: ${totalDuration.toFixed(1)}s`);
+        } else {
+            // Update - use last 30s for context, but only extract new text
+            const contextDuration = 30; // seconds
+            const contextSamples = contextDuration * 16000;
+            const startSample = Math.max(0, totalSamples - contextSamples);
+            audioToProcess = allAudio.slice(startSample);
+            isUpdate = true;
+            console.log(`📊 Update: using last ${(audioToProcess.length/16000).toFixed(1)}s for context`);
+        }
         
-        // Transcribe only the NEW audio
+        // Transcribe with language detection
         const language = els.languageSelect ? els.languageSelect.value : null;
         const options = {
             chunk_length_s: 30,
@@ -753,27 +782,27 @@ async function processIncrementalAudio() {
             options.language = language;
         }
         
-        const result = await state.transcriber(newAudio, options);
-        const newText = result.text || '';
+        const result = await state.transcriber(audioToProcess, options);
+        const transcribedText = result.text || '';
         
-        console.log(`✅ Transcribed: "${newText}"`);
+        console.log(`✅ Transcribed: "${transcribedText}"`);
         
-        // Append new text to existing transcript
-        if (newText.trim()) {
-            if (state.currentTranscript.trim()) {
-                state.currentTranscript += ' ' + newText;
+        if (transcribedText.trim()) {
+            if (isUpdate) {
+                // For updates, replace entire transcript (includes context)
+                state.currentTranscript = transcribedText;
             } else {
-                state.currentTranscript = newText;
+                // First transcription
+                state.currentTranscript = transcribedText;
             }
             
             els.transcript.textContent = state.currentTranscript;
             els.transcript.scrollTop = els.transcript.scrollHeight;
             
-            const totalDuration = totalSamples / 16000;
             setStatus(`Live transcription (${totalDuration.toFixed(0)}s)…`, true);
         }
         
-        // Mark these samples as processed
+        // Mark current position as processed
         state.lastProcessedSampleIndex = totalSamples;
         
     } catch (err) {
@@ -989,8 +1018,8 @@ async function startScreenShare() {
             }
         };
         
-        // Process NEW audio every 5 seconds
-        console.log('⏰ Setting up 5-second interval for incremental processing');
+        // Check for updates every 5 seconds (will process when enough audio accumulated)
+        console.log('⏰ Setting up interval for live processing');
         state.liveProcessInterval = setInterval(() => {
             if (state.isLiveTranscribing && state.liveAudioBuffer.length > 0) {
                 processIncrementalAudio().catch(err => {
