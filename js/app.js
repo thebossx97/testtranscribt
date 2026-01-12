@@ -837,70 +837,127 @@ async function transcribeUtteranceWithDiarization(audioFloat32, startTime, featu
     }
 }
 
-// Speaker identification using feature clustering
+// Speaker identification using advanced feature clustering
 function identifySpeaker(features) {
+    // Log features for debugging
+    console.log('📊 Speaker features:', {
+        pitch: features.pitch?.toFixed(1),
+        formant: features.formant?.toFixed(1),
+        energy: features.energy?.toFixed(3),
+        lowBand: features.lowBand?.toFixed(3),
+        midBand: features.midBand?.toFixed(3),
+        highBand: features.highBand?.toFixed(3),
+        pitchVariance: features.pitchVariance?.toFixed(1)
+    });
+    
     if (state.speakers.length === 0) {
         // First speaker
         state.speakers.push({
             id: 0,
             name: 'Speaker 1',
+            emoji: '👤',
             color: state.speakerColors[0],
-            features: features,
-            utteranceCount: 1
+            features: {...features},
+            utteranceCount: 1,
+            totalDuration: features.duration || 0
         });
+        console.log('🆕 First speaker created: Speaker 1');
         return 0;
     }
     
-    // Find closest speaker using feature distance
-    let minDistance = Infinity;
-    let closestSpeaker = 0;
+    // Calculate distances to all existing speakers
+    const distances = state.speakers.map((speaker, idx) => ({
+        id: idx,
+        distance: calculateFeatureDistance(features, speaker.features)
+    }));
     
-    for (let i = 0; i < state.speakers.length; i++) {
-        const distance = calculateFeatureDistance(features, state.speakers[i].features);
-        if (distance < minDistance) {
-            minDistance = distance;
-            closestSpeaker = i;
+    distances.sort((a, b) => a.distance - b.distance);
+    const closest = distances[0];
+    
+    // Adaptive threshold based on number of speakers
+    const baseThreshold = 0.20;
+    const adaptiveThreshold = baseThreshold * (1 + state.speakers.length * 0.05);
+    
+    console.log(`🎯 Closest: Speaker ${closest.id + 1} (distance: ${closest.distance.toFixed(3)}, threshold: ${adaptiveThreshold.toFixed(3)})`);
+    
+    if (closest.distance < adaptiveThreshold) {
+        // Assign to existing speaker with confidence-weighted update
+        const speaker = state.speakers[closest.id];
+        speaker.utteranceCount++;
+        speaker.totalDuration += features.duration || 0;
+        
+        // Exponential moving average with adaptive learning rate
+        const confidence = 1 / (1 + closest.distance);
+        const alpha = 0.15 * confidence;
+        
+        // Update all features
+        speaker.features.pitch = (1 - alpha) * speaker.features.pitch + alpha * features.pitch;
+        speaker.features.energy = (1 - alpha) * speaker.features.energy + alpha * features.energy;
+        speaker.features.formant = (1 - alpha) * (speaker.features.formant || 0) + alpha * (features.formant || 0);
+        speaker.features.lowBand = (1 - alpha) * (speaker.features.lowBand || 0) + alpha * (features.lowBand || 0);
+        speaker.features.midBand = (1 - alpha) * (speaker.features.midBand || 0) + alpha * (features.midBand || 0);
+        speaker.features.highBand = (1 - alpha) * (speaker.features.highBand || 0) + alpha * (features.highBand || 0);
+        speaker.features.pitchVariance = (1 - alpha) * (speaker.features.pitchVariance || 0) + alpha * (features.pitchVariance || 0);
+        
+        console.log(`✅ Assigned to Speaker ${closest.id + 1} (confidence: ${(confidence * 100).toFixed(1)}%)`);
+        return closest.id;
+    } else {
+        // Create new speaker
+        if (state.speakers.length >= 8) {
+            console.warn('⚠️ Max speakers (8) reached, assigning to closest');
+            return closest.id;
         }
-    }
-    
-    // Threshold for new speaker (tune this based on testing)
-    const newSpeakerThreshold = 0.25;
-    
-    if (minDistance > newSpeakerThreshold && state.speakers.length < 8) {
-        // New speaker detected
+        
         const newId = state.speakers.length;
+        const avatarEmojis = ['👤', '👨', '👩', '🧑', '👨‍💼', '👩‍💼', '🧑‍💻', '👨‍🎓'];
+        
         state.speakers.push({
             id: newId,
             name: `Speaker ${newId + 1}`,
+            emoji: avatarEmojis[newId % avatarEmojis.length],
             color: state.speakerColors[newId % state.speakerColors.length],
-            features: features,
-            utteranceCount: 1
+            features: {...features},
+            utteranceCount: 1,
+            totalDuration: features.duration || 0
         });
         console.log(`🆕 New speaker detected: Speaker ${newId + 1}`);
         return newId;
-    } else {
-        // Existing speaker - update running average
-        const speaker = state.speakers[closestSpeaker];
-        speaker.utteranceCount++;
-        const alpha = 0.2; // Learning rate
-        speaker.features.pitch = (1 - alpha) * speaker.features.pitch + alpha * features.pitch;
-        speaker.features.energy = (1 - alpha) * speaker.features.energy + alpha * features.energy;
-        speaker.features.spectral = (1 - alpha) * speaker.features.spectral + alpha * features.spectral;
-        return closestSpeaker;
     }
 }
 
 function calculateFeatureDistance(f1, f2) {
-    // Normalized euclidean distance
-    const pitchDiff = (f1.pitch - f2.pitch) / 0.5;
-    const energyDiff = (f1.energy - f2.energy) / 0.1;
-    const spectralDiff = (f1.spectral - f2.spectral) / 1000;
+    // Weighted multi-dimensional distance for better speaker separation
+    const weights = {
+        pitch: 2.0,          // Most important for speaker ID
+        formant: 1.8,        // Vowel characteristics
+        midBand: 1.5,        // Timbre
+        lowBand: 1.2,
+        highBand: 1.0,
+        energy: 0.5,         // Less important (volume varies)
+        pitchVariance: 0.8
+    };
     
-    return Math.sqrt(
-        pitchDiff * pitchDiff + 
-        energyDiff * energyDiff + 
-        spectralDiff * spectralDiff
-    ) / Math.sqrt(3);
+    // Normalize and calculate weighted differences
+    const pitchDiff = Math.abs(f1.pitch - f2.pitch) / 200;  // ~200 Hz range
+    const formantDiff = Math.abs((f1.formant || 0) - (f2.formant || 0)) / 50;
+    const lowDiff = Math.abs((f1.lowBand || 0) - (f2.lowBand || 0));
+    const midDiff = Math.abs((f1.midBand || 0) - (f2.midBand || 0));
+    const highDiff = Math.abs((f1.highBand || 0) - (f2.highBand || 0));
+    const energyDiff = Math.abs(f1.energy - f2.energy) / 0.1;
+    const varianceDiff = Math.abs((f1.pitchVariance || 0) - (f2.pitchVariance || 0)) / 100;
+    
+    const distance = Math.sqrt(
+        weights.pitch * pitchDiff * pitchDiff +
+        weights.formant * formantDiff * formantDiff +
+        weights.lowBand * lowDiff * lowDiff +
+        weights.midBand * midDiff * midDiff +
+        weights.highBand * highDiff * highDiff +
+        weights.energy * energyDiff * energyDiff +
+        weights.pitchVariance * varianceDiff * varianceDiff
+    );
+    
+    const totalWeight = Object.values(weights).reduce((a, b) => a + b, 0);
+    return distance / Math.sqrt(totalWeight);
 }
 
 // Update display with diarized transcript

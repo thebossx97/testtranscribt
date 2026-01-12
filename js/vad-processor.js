@@ -34,28 +34,81 @@ class VADProcessor extends AudioWorkletProcessor {
         return Math.sqrt(sum / samples.length);
     }
     
-    // Extract pitch estimate (zero-crossing rate proxy)
-    calculateZCR(samples) {
-        let crossings = 0;
-        for (let i = 1; i < samples.length; i++) {
-            if ((samples[i] >= 0 && samples[i-1] < 0) || 
-                (samples[i] < 0 && samples[i-1] >= 0)) {
-                crossings++;
+    // Improved pitch detection using autocorrelation
+    calculatePitch(samples) {
+        const minLag = Math.floor(sampleRate / 500); // 500 Hz max
+        const maxLag = Math.floor(sampleRate / 80);  // 80 Hz min
+        
+        let bestCorrelation = -1;
+        let bestLag = minLag;
+        
+        for (let lag = minLag; lag < maxLag && lag < samples.length / 2; lag++) {
+            let correlation = 0;
+            for (let i = 0; i < samples.length - lag; i++) {
+                correlation += samples[i] * samples[i + lag];
+            }
+            if (correlation > bestCorrelation) {
+                bestCorrelation = correlation;
+                bestLag = lag;
             }
         }
-        return crossings / samples.length;
+        
+        return sampleRate / bestLag; // Frequency in Hz
     }
     
-    // Spectral centroid approximation
-    calculateSpectralCentroid(samples) {
-        let weightedSum = 0;
-        let sum = 0;
-        for (let i = 0; i < samples.length; i++) {
-            const mag = Math.abs(samples[i]);
-            weightedSum += mag * i;
-            sum += mag;
+    // Spectral features (multiple bands)
+    calculateSpectralFeatures(samples) {
+        const features = {
+            lowBand: 0,   // 0-300 Hz (bass, fundamental)
+            midBand: 0,   // 300-2000 Hz (formants, vowels)
+            highBand: 0,  // 2000+ Hz (consonants, sibilants)
+        };
+        
+        // Simple band energy (approximation without FFT)
+        const third = Math.floor(samples.length / 3);
+        
+        for (let i = 0; i < third; i++) {
+            features.lowBand += Math.abs(samples[i]);
         }
-        return sum > 0 ? weightedSum / sum : 0;
+        for (let i = third; i < 2 * third; i++) {
+            features.midBand += Math.abs(samples[i]);
+        }
+        for (let i = 2 * third; i < samples.length; i++) {
+            features.highBand += Math.abs(samples[i]);
+        }
+        
+        // Normalize to proportions
+        const total = features.lowBand + features.midBand + features.highBand;
+        if (total > 0) {
+            features.lowBand /= total;
+            features.midBand /= total;
+            features.highBand /= total;
+        }
+        
+        return features;
+    }
+    
+    // Formant approximation (vowel characteristics)
+    calculateFormants(samples) {
+        // Simplified formant estimation using peak detection
+        const peaks = [];
+        for (let i = 1; i < samples.length - 1; i++) {
+            if (Math.abs(samples[i]) > Math.abs(samples[i-1]) && 
+                Math.abs(samples[i]) > Math.abs(samples[i+1]) &&
+                Math.abs(samples[i]) > 0.1) {
+                peaks.push(i);
+            }
+        }
+        
+        // Return average peak spacing (formant proxy)
+        if (peaks.length > 1) {
+            let avgSpacing = 0;
+            for (let i = 1; i < peaks.length; i++) {
+                avgSpacing += peaks[i] - peaks[i-1];
+            }
+            return avgSpacing / (peaks.length - 1);
+        }
+        return 0;
     }
     
     process(inputs, outputs, parameters) {
@@ -146,28 +199,61 @@ class VADProcessor extends AudioWorkletProcessor {
     }
     
     extractSpeakerFeatures(samples) {
-        // Extract features for speaker identification
-        const chunkSize = 4096;
-        const chunks = Math.floor(samples.length / chunkSize);
+        const windowSize = 4096;
+        const numWindows = Math.floor(samples.length / windowSize);
         
-        let avgPitch = 0;
-        let avgEnergy = 0;
-        let avgSpectral = 0;
+        let features = {
+            pitch: [],
+            energy: [],
+            formant: [],
+            lowBand: [],
+            midBand: [],
+            highBand: []
+        };
         
-        for (let i = 0; i < chunks; i++) {
-            const start = i * chunkSize;
-            const chunk = samples.slice(start, start + chunkSize);
-            avgPitch += this.calculateZCR(chunk);
-            avgEnergy += this.calculateRMS(chunk);
-            avgSpectral += this.calculateSpectralCentroid(chunk);
+        // Extract features from multiple windows
+        for (let i = 0; i < numWindows; i++) {
+            const start = i * windowSize;
+            const window = samples.slice(start, start + windowSize);
+            
+            const rms = this.calculateRMS(window);
+            if (rms > 0.01) { // Only analyze frames with speech
+                features.pitch.push(this.calculatePitch(window));
+                features.energy.push(rms);
+                features.formant.push(this.calculateFormants(window));
+                
+                const spectral = this.calculateSpectralFeatures(window);
+                features.lowBand.push(spectral.lowBand);
+                features.midBand.push(spectral.midBand);
+                features.highBand.push(spectral.highBand);
+            }
         }
         
+        // Return median values (more robust than mean)
         return {
-            pitch: avgPitch / chunks,           // Higher for female voices
-            energy: avgEnergy / chunks,         // Speaking volume
-            spectral: avgSpectral / chunks,     // Timbre characteristic
+            pitch: this.median(features.pitch),
+            energy: this.median(features.energy),
+            formant: this.median(features.formant),
+            lowBand: this.median(features.lowBand),
+            midBand: this.median(features.midBand),
+            highBand: this.median(features.highBand),
+            pitchVariance: this.variance(features.pitch),
+            energyVariance: this.variance(features.energy),
             duration: samples.length / sampleRate
         };
+    }
+    
+    median(arr) {
+        if (arr.length === 0) return 0;
+        const sorted = [...arr].sort((a, b) => a - b);
+        const mid = Math.floor(sorted.length / 2);
+        return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+    }
+    
+    variance(arr) {
+        if (arr.length === 0) return 0;
+        const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
+        return arr.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / arr.length;
     }
 }
 
