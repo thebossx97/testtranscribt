@@ -105,7 +105,14 @@ const state = {
     audioContext: null,
     audioWorkletNode: null,
     isSpeaking: false,
-    speechStartTime: 0
+    speechStartTime: 0,
+    // Diarization state
+    utterances: [],              // Store all utterances with features
+    speakers: [],                // Identified speakers
+    speakerColors: [             // Visual speaker distinction
+        '#3b82f6', '#10b981', '#f59e0b', '#ef4444', 
+        '#8b5cf6', '#ec4899', '#14b8a6', '#f97316'
+    ]
 };
 
 // Helper to check if any operation is in progress
@@ -736,28 +743,29 @@ function removeDuplicateSentences(text) {
 // Create AudioWorklet processor as inline blob
 // Handle VAD events from AudioWorklet
 async function handleVADEvent(event) {
-    const { type, audio, duration } = event.data;
+    const { type, audio, timestamp, duration, features } = event.data;
     
     if (type === 'speech_start') {
-        console.log('🗣️ Speech started');
+        console.log(`🗣️ Speech started at ${timestamp?.toFixed(2)}s`);
         state.isSpeaking = true;
         state.speechStartTime = Date.now();
-        setStatus('🎤 Speaking detected...', true);
+        setStatus('🎤 Speaking...', true);
         
     } else if (type === 'speech_end') {
-        console.log(`🔇 Speech ended (${duration}s), transcribing...`);
+        console.log(`🔇 Speech ended: ${duration}s, features:`, features);
         state.isSpeaking = false;
-        setStatus('⚙️ Transcribing...', true);
+        setStatus('⚙️ Transcribing with timestamps...', true);
         
-        // Transcribe this utterance
-        await transcribeUtterance(audio);
+        // Transcribe with diarization
+        await transcribeUtteranceWithDiarization(audio, timestamp, features);
         
         setStatus('👂 Listening...', true);
     }
 }
 
 // Transcribe a single utterance (speech segment)
-async function transcribeUtterance(audioFloat32) {
+// Transcribe with speaker diarization
+async function transcribeUtteranceWithDiarization(audioFloat32, startTime, features) {
     if (state.isTranscribing) {
         console.log('⏭️ Already transcribing, queuing...');
         return;
@@ -766,16 +774,15 @@ async function transcribeUtterance(audioFloat32) {
     try {
         state.isTranscribing = true;
         
-        const duration = (audioFloat32.length / VAD_CONFIG.sampleRate).toFixed(1);
-        console.log(`📊 Transcribing ${audioFloat32.length} samples (${duration}s)...`);
+        console.log(`📊 Transcribing ${audioFloat32.length} samples...`);
         
-        // Transcribe with Whisper
+        // Transcribe with WORD-LEVEL timestamps
         const language = els.languageSelect ? els.languageSelect.value : null;
         const options = {
             chunk_length_s: 30,
             stride_length_s: 5,
-            return_timestamps: false,
-            condition_on_previous_text: false  // Critical: prevents hallucination
+            return_timestamps: 'word',  // KEY: Word-level timestamps!
+            condition_on_previous_text: false
         };
         
         if (language) {
@@ -783,35 +790,44 @@ async function transcribeUtterance(audioFloat32) {
         }
         
         const result = await state.transcriber(audioFloat32, options);
-        const newText = result.text.trim();
         
-        if (newText.length > 0) {
-            console.log(`✅ Transcribed: "${newText.substring(0, 100)}${newText.length > 100 ? '...' : ''}"`);
-            
-            // Smart append
-            if (state.currentTranscript.length > 0) {
-                const lastChar = state.currentTranscript.slice(-1);
-                const needsSpace = !['.', '!', '?', '\n'].includes(lastChar);
-                state.currentTranscript += (needsSpace ? ' ' : ' ') + newText;
-            } else {
-                state.currentTranscript = newText;
-            }
-            
-            // Remove duplicates
-            state.currentTranscript = removeDuplicateSentences(state.currentTranscript);
-            
-            // Update display
-            els.transcript.textContent = state.currentTranscript;
-            els.transcript.scrollTop = els.transcript.scrollHeight;
-            
-            // Enable export buttons
-            if (state.currentTranscript.trim()) {
-                els.copyBtn.disabled = false;
-                els.downloadBtn.disabled = false;
-            }
-            
-            console.log(`Total transcript: ${state.currentTranscript.length} chars`);
+        console.log('Whisper output:', result);
+        
+        // Extract text and chunks (word timestamps)
+        const text = result.text?.trim() || '';
+        const chunks = result.chunks || [];
+        
+        if (!text || text.length === 0) {
+            console.log('⏭️ Empty transcription, skipping');
+            return;
         }
+        
+        // Identify speaker
+        const speakerId = identifySpeaker(features);
+        const speaker = state.speakers[speakerId];
+        
+        // Store utterance
+        const utterance = {
+            id: state.utterances.length,
+            text: text,
+            speaker: speaker,
+            speakerId: speakerId,
+            timestamp: startTime,
+            duration: audioFloat32.length / VAD_CONFIG.sampleRate,
+            features: features,
+            chunks: chunks  // Word-level timestamps
+        };
+        
+        state.utterances.push(utterance);
+        
+        // Update display
+        updateDiarizedTranscript();
+        
+        // Enable export buttons
+        els.copyBtn.disabled = false;
+        els.downloadBtn.disabled = false;
+        
+        console.log(`✅ Speaker ${speakerId + 1}: "${text}"`);
         
     } catch (error) {
         console.error('❌ Transcription error:', error);
@@ -819,6 +835,99 @@ async function transcribeUtterance(audioFloat32) {
     } finally {
         state.isTranscribing = false;
     }
+}
+
+// Speaker identification using feature clustering
+function identifySpeaker(features) {
+    if (state.speakers.length === 0) {
+        // First speaker
+        state.speakers.push({
+            id: 0,
+            name: 'Speaker 1',
+            color: state.speakerColors[0],
+            features: features,
+            utteranceCount: 1
+        });
+        return 0;
+    }
+    
+    // Find closest speaker using feature distance
+    let minDistance = Infinity;
+    let closestSpeaker = 0;
+    
+    for (let i = 0; i < state.speakers.length; i++) {
+        const distance = calculateFeatureDistance(features, state.speakers[i].features);
+        if (distance < minDistance) {
+            minDistance = distance;
+            closestSpeaker = i;
+        }
+    }
+    
+    // Threshold for new speaker (tune this based on testing)
+    const newSpeakerThreshold = 0.25;
+    
+    if (minDistance > newSpeakerThreshold && state.speakers.length < 8) {
+        // New speaker detected
+        const newId = state.speakers.length;
+        state.speakers.push({
+            id: newId,
+            name: `Speaker ${newId + 1}`,
+            color: state.speakerColors[newId % state.speakerColors.length],
+            features: features,
+            utteranceCount: 1
+        });
+        console.log(`🆕 New speaker detected: Speaker ${newId + 1}`);
+        return newId;
+    } else {
+        // Existing speaker - update running average
+        const speaker = state.speakers[closestSpeaker];
+        speaker.utteranceCount++;
+        const alpha = 0.2; // Learning rate
+        speaker.features.pitch = (1 - alpha) * speaker.features.pitch + alpha * features.pitch;
+        speaker.features.energy = (1 - alpha) * speaker.features.energy + alpha * features.energy;
+        speaker.features.spectral = (1 - alpha) * speaker.features.spectral + alpha * features.spectral;
+        return closestSpeaker;
+    }
+}
+
+function calculateFeatureDistance(f1, f2) {
+    // Normalized euclidean distance
+    const pitchDiff = (f1.pitch - f2.pitch) / 0.5;
+    const energyDiff = (f1.energy - f2.energy) / 0.1;
+    const spectralDiff = (f1.spectral - f2.spectral) / 1000;
+    
+    return Math.sqrt(
+        pitchDiff * pitchDiff + 
+        energyDiff * energyDiff + 
+        spectralDiff * spectralDiff
+    ) / Math.sqrt(3);
+}
+
+// Update display with diarized transcript
+function updateDiarizedTranscript() {
+    // Build formatted transcript with speakers and timestamps
+    let formatted = '';
+    
+    for (const utt of state.utterances) {
+        const time = formatTimestamp(utt.timestamp);
+        const speaker = utt.speaker.name;
+        
+        // Add speaker label with timestamp
+        formatted += `\n[${time}] ${speaker}:\n${utt.text}\n`;
+    }
+    
+    els.transcript.textContent = formatted.trim();
+    els.transcript.scrollTop = els.transcript.scrollHeight;
+    
+    // Update current transcript for compatibility
+    state.currentTranscript = formatted.trim();
+}
+
+function formatTimestamp(seconds) {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    const ms = Math.floor((seconds % 1) * 10);
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${ms}`;
 }
 
 async function transcribeFloat32(float32Data) {
@@ -1061,7 +1170,7 @@ function cleanupScreenShare() {
         state.shareStream = null;
     }
     
-    // Reset state
+    // Reset state (keep utterances and speakers for review)
     state.isSpeaking = false;
     state.isLiveTranscribing = false;
     
@@ -1074,6 +1183,7 @@ function cleanupScreenShare() {
     els.progressText.textContent = '';
     
     console.log('✅ Cleanup complete');
+    console.log(`📊 Final stats: ${state.utterances.length} utterances, ${state.speakers.length} speakers`);
 }
 
 function stopScreenShare() {
