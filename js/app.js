@@ -1003,18 +1003,6 @@ async function startScreenShare() {
         showAlert(error.message);
         cleanupScreenShare();
     }
-    } catch (err) {
-        console.error('Screen share error:', err);
-        cleanupScreenShare();
-        
-        if (err.name === 'NotAllowedError' || err.name === 'AbortError') {
-            setStatus('Capture cancelled', false);
-            els.progressText.textContent = '';
-        } else {
-            setStatus('Capture not started');
-            showAlert('Could not start screen/tab capture: ' + err.message);
-        }
-    }
 }
 
 function cleanupScreenShare() {
