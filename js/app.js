@@ -99,9 +99,11 @@ const state = {
     audioContexts: [], // Track for cleanup
     loadedModels: {}, // Cache for preloaded models
     allModelsLoaded: false,
-    // Live transcription state
+    // Live transcription state (VAD-based)
     isLiveTranscribing: false,
-    lastProcessedChunkIndex: 0  // Track which chunks we've already transcribed
+    vad: null,                    // VAD instance
+    isSpeaking: false,            // Current speech state
+    speechStartTime: 0            // When current utterance started
 };
 
 // Helper to check if any operation is in progress
@@ -698,113 +700,137 @@ async function fileToFloat32(file) {
     }
 }
 
-// Simple voice activity detection based on audio energy
-function hasVoiceActivity(audioData) {
-    // Calculate RMS (root mean square) energy
-    let sumSquares = 0;
-    for (let i = 0; i < audioData.length; i++) {
-        sumSquares += audioData[i] * audioData[i];
-    }
-    const rms = Math.sqrt(sumSquares / audioData.length);
-    
-    // Threshold for voice activity (tune this value)
-    const threshold = 0.01;
-    
-    console.log(`🔊 Audio energy (RMS): ${rms.toFixed(4)}, threshold: ${threshold}`);
-    
-    return rms > threshold;
-}
+// ==================== VAD-BASED LIVE TRANSCRIPTION ====================
 
-// Remove duplicate segments from transcript
-function removeDuplicateSegments(text) {
-    const sentences = text.split(/[.!?]\s+/);
+// Remove duplicate sentences from transcript
+function removeDuplicateSentences(text) {
+    const sentences = text.match(/[^.!?\n]+[.!?\n]+/g) || [text];
     const seen = new Set();
-    return sentences.filter(sentence => {
-        const normalized = sentence.trim().toLowerCase();
-        if (!normalized || seen.has(normalized)) return false;
+    const unique = [];
+    
+    for (const sentence of sentences) {
+        const normalized = sentence.trim().toLowerCase()
+            .replace(/[.,!?;:]/g, '')
+            .replace(/\s+/g, ' ');
+        
+        if (!normalized || seen.has(normalized)) {
+            if (normalized) console.log(`🗑️ Removed duplicate: "${sentence.trim().substring(0, 50)}..."`);
+            continue;
+        }
         seen.add(normalized);
-        return true;
-    }).join('. ') + (text.endsWith('.') || text.endsWith('!') || text.endsWith('?') ? '' : '.');
-}
-
-// Process only NEW chunks with sliding window approach
-async function processAccumulatedChunks() {
-    if (!state.isLiveTranscribing || state.isTranscribing || state.shareChunks.length === 0) {
-        return;
+        unique.push(sentence);
     }
     
-    // Track which chunks we've already processed
-    const processedChunkCount = state.lastProcessedChunkIndex || 0;
-    const newChunks = state.shareChunks.slice(processedChunkCount);
+    return unique.join(' ').trim();
+}
+
+// Initialize Silero VAD for smart speech detection
+async function initializeVAD() {
+    console.log('🎙️ Initializing Voice Activity Detection...');
     
-    if (newChunks.length === 0) {
-        console.log('⏭️ No new chunks to process');
+    try {
+        state.vad = await vad.MicVAD.new({
+            onSpeechStart: () => {
+                console.log('🗣️ Speech started');
+                state.isSpeaking = true;
+                state.speechStartTime = Date.now();
+                setStatus('🎤 Listening...', true);
+            },
+            
+            onSpeechEnd: async (audio) => {
+                const duration = ((Date.now() - state.speechStartTime) / 1000).toFixed(1);
+                console.log(`🔇 Speech ended (${duration}s), transcribing...`);
+                state.isSpeaking = false;
+                setStatus('⚙️ Transcribing...', true);
+                
+                // Transcribe this utterance
+                await transcribeUtterance(audio);
+                
+                setStatus('👂 Ready for next speech...', true);
+            },
+            
+            onVADMisfire: () => {
+                console.log('⚠️ False positive, ignoring...');
+            },
+            
+            // Configuration for balanced performance
+            positiveSpeechThreshold: 0.8,    // Higher = more confident
+            negativeSpeechThreshold: 0.5,    // Lower = quicker to detect silence  
+            minSpeechFrames: 3,               // Min frames to trigger speech
+            preSpeechPadFrames: 1,            // Padding before speech
+            redemptionFrames: 8,              // Frames of silence before ending
+            frameSamples: 1536,               // Audio frame size
+            baseAssetPath: 'https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.7/dist',
+            onnxWASMBasePath: 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist'
+        });
+        
+        console.log('✅ VAD initialized successfully');
+        return true;
+        
+    } catch (error) {
+        console.error('❌ VAD initialization failed:', error);
+        showAlert('Failed to initialize voice detection: ' + error.message);
+        return false;
+    }
+}
+
+// Transcribe a single utterance (speech segment)
+async function transcribeUtterance(audioFloat32) {
+    if (state.isTranscribing) {
+        console.log('⏭️ Already transcribing, queuing...');
         return;
     }
     
     try {
         state.isTranscribing = true;
         
-        console.log(`\n🎵 Processing ${newChunks.length} NEW chunks (${processedChunkCount} already processed)`);
+        console.log(`📊 Transcribing ${audioFloat32.length} samples (${(audioFloat32.length/16000).toFixed(1)}s)...`);
         
-        // Process ONLY the new chunks
-        const blob = new Blob(newChunks, { type: newChunks[0].type });
-        const float32Data = await blobToFloat32(blob);
-        const duration = float32Data.length / 16000;
-        
-        console.log(`📊 New audio: ${duration.toFixed(1)}s`);
-        
-        // Check for voice activity
-        if (!hasVoiceActivity(float32Data)) {
-            console.log('⏭️ No voice activity in new audio, skipping');
-            state.lastProcessedChunkIndex = state.shareChunks.length;
-            state.isTranscribing = false;
-            return;
-        }
-        
-        console.log('✅ Voice activity detected, transcribing NEW audio only...');
-        
-        // Transcribe ONLY the new audio with condition_on_previous_text: false
+        // Transcribe with Whisper
         const language = els.languageSelect ? els.languageSelect.value : null;
         const options = {
             chunk_length_s: 30,
             stride_length_s: 5,
             return_timestamps: false,
-            condition_on_previous_text: false  // Critical: prevents repetition
+            condition_on_previous_text: false  // Critical: prevents hallucination
         };
         
         if (language) {
             options.language = language;
         }
         
-        const result = await state.transcriber(float32Data, options);
-        const newText = result.text || '';
+        const result = await state.transcriber(audioFloat32, options);
+        const newText = result.text.trim();
         
-        console.log(`✅ New text (${newText.length} chars): "${newText.substring(0, 100)}${newText.length > 100 ? '...' : ''}"`);
-        
-        // Append new text to existing transcript
-        if (newText.trim()) {
-            if (state.currentTranscript.trim()) {
-                state.currentTranscript += ' ' + newText.trim();
+        if (newText.length > 0) {
+            console.log(`✅ Transcribed: "${newText.substring(0, 100)}${newText.length > 100 ? '...' : ''}"`);
+            
+            // Smart append: add space or punctuation
+            if (state.currentTranscript.length > 0) {
+                const lastChar = state.currentTranscript.slice(-1);
+                const needsSpace = !['.', '!', '?', '\n'].includes(lastChar);
+                state.currentTranscript += (needsSpace ? ' ' : '\n') + newText;
             } else {
-                state.currentTranscript = newText.trim();
+                state.currentTranscript = newText;
             }
             
-            // Apply post-processing to remove any duplicates
-            state.currentTranscript = removeDuplicateSegments(state.currentTranscript);
+            // Remove duplicates
+            state.currentTranscript = removeDuplicateSentences(state.currentTranscript);
             
+            // Update display
             els.transcript.textContent = state.currentTranscript;
             els.transcript.scrollTop = els.transcript.scrollHeight;
             
-            const totalDuration = (state.shareChunks.length * 15); // Approximate
-            setStatus(`Live transcription (~${Math.floor(totalDuration)}s)…`, true);
+            // Enable export buttons
+            if (state.currentTranscript.trim()) {
+                els.copyBtn.disabled = false;
+                els.downloadBtn.disabled = false;
+            }
         }
         
-        // Mark these chunks as processed
-        state.lastProcessedChunkIndex = state.shareChunks.length;
-        
-    } catch (err) {
-        console.error('❌ Processing error:', err);
+    } catch (error) {
+        console.error('❌ Transcription error:', error);
+        showAlert(`Transcription failed: ${error.message}`);
     } finally {
         state.isTranscribing = false;
     }
@@ -931,142 +957,52 @@ function getSupportedMimeType() {
 }
 
 async function startScreenShare() {
+    console.log('\n🎬 Starting VAD-based live transcription...');
+    
     try {
         if (isAnyOperationInProgress()) {
-            showAlert('Please wait for the current operation to complete.', 'warning');
+            showAlert('Please wait for the current operation to complete.');
             return;
         }
         
+        // Load Whisper model if needed
         await loadModelIfNeeded();
         if (!state.transcriber) {
             return;
         }
         
-        const mimeType = getSupportedMimeType();
-        if (!mimeType) {
-            showAlert('Your browser does not support audio recording', 'error');
-            return;
+        // Initialize VAD if not already done
+        if (!state.vad) {
+            const success = await initializeVAD();
+            if (!success) return;
         }
         
+        // Update UI
         els.startShareBtn.disabled = true;
         els.stopShareBtn.disabled = false;
         els.transcribeFileBtn.disabled = true;
         els.copyBtn.disabled = true;
         els.downloadBtn.disabled = true;
-        els.progressText.textContent = 'Waiting for you to select what to share…';
         
-        // Request display media with audio
-        const stream = await navigator.mediaDevices.getDisplayMedia({
-            video: true,
-            audio: {
-                echoCancellation: false,
-                noiseSuppression: false,
-                autoGainControl: false
-            }
-        });
-        
-        // Check if audio track exists
-        const audioTracks = stream.getAudioTracks();
-        if (audioTracks.length === 0) {
-            stream.getTracks().forEach(t => t.stop());
-            els.startShareBtn.disabled = false;
-            els.stopShareBtn.disabled = true;
-            els.progressText.textContent = '';
-            throw new Error('No audio track available. Make sure to enable "Share audio" when selecting the tab/window.');
-        }
-        
-        console.log('Audio track captured:', audioTracks[0].label, 'enabled:', audioTracks[0].enabled);
-        
-        state.shareStream = stream;
-        state.shareChunks = [];
-        state.lastProcessedChunkIndex = 0;
+        // Clear transcript
+        els.transcript.innerHTML = '<em style="color: var(--color-gray-400);">🎙️ Voice detection active - speak naturally, transcription appears when you pause</em>';
+        state.currentTranscript = '';
         state.isLiveTranscribing = true;
         
-        // Clear transcript for live updates
-        els.transcript.innerHTML = '<em style="color: var(--color-gray-400);">Listening... speak to see live transcription</em>';
-        state.currentTranscript = '';
+        // Start VAD listening
+        state.vad.start();
         
-        // Create audio-only stream for recording
-        const audioStream = new MediaStream();
-        audioTracks.forEach(track => audioStream.addTrack(track));
+        setStatus('🎙️ Voice detection active', true);
+        els.progressText.textContent = 'Speak naturally - transcription starts when you pause';
+        showAlert('Voice detection active! Speak naturally and pause between sentences.');
         
-        // Record with MediaRecorder - request data every 10 seconds
-        state.shareRecorder = new MediaRecorder(audioStream, { mimeType });
+        console.log('✅ VAD recording started');
         
-        state.shareRecorder.ondataavailable = async (e) => {
-            if (e.data && e.data.size > 0) {
-                console.log(`📦 Chunk received: ${e.data.size} bytes`);
-                state.shareChunks.push(e.data);
-                
-                // Process accumulated chunks
-                if (state.isLiveTranscribing && !state.isTranscribing) {
-                    processAccumulatedChunks().catch(err => {
-                        console.error('Processing error:', err);
-                    });
-                }
-            }
-        };
-        
-        state.shareRecorder.onstop = async () => {
-            try {
-                // Stop live transcription and interval
-                state.isLiveTranscribing = false;
-                if (state.liveProcessInterval) {
-                    clearInterval(state.liveProcessInterval);
-                    state.liveProcessInterval = null;
-                }
-                
-                console.log('Recording stopped.');
-                
-                // Process final chunks if any
-                if (state.shareChunks.length > 0) {
-                    console.log('Processing final audio...');
-                    els.progressText.textContent = 'Finalizing transcription…';
-                    
-                    await processAccumulatedChunks();
-                }
-                
-                els.progressText.textContent = '✓ Live transcription complete';
-                setStatus('Transcription complete', false);
-                
-                // Enable copy/download if we have text
-                if (state.currentTranscript.trim()) {
-                    els.copyBtn.disabled = false;
-                    els.downloadBtn.disabled = false;
-                }
-                
-            } catch (err) {
-                console.error('Capture processing error:', err);
-                showAlert('Error processing captured audio: ' + err.message);
-            } finally {
-                cleanupScreenShare();
-            }
-        };
-        
-        state.shareRecorder.onerror = (e) => {
-            console.error('MediaRecorder error:', e);
-            showAlert('Recording error: ' + e.error);
-            cleanupScreenShare();
-        };
-        
-        // Handle stream ending (user stops sharing)
-        const videoTrack = stream.getVideoTracks()[0];
-        if (videoTrack) {
-            videoTrack.addEventListener('ended', () => {
-                console.log('Video track ended, stopping recording');
-                if (state.shareRecorder && state.shareRecorder.state === 'recording') {
-                    state.shareRecorder.stop();
-                }
-            });
-        }
-        
-        setStatus('Live transcription active…', true);
-        els.progressText.textContent = '🔴 Live transcription active - updates every 15s';
-        
-        // Start recording with 15-second chunks (optimal for Whisper)
-        // Research shows 15s minimum reduces hallucination
-        state.shareRecorder.start(15000);
-        console.log('🎙️ Live transcription started (15s chunks) with mime type:', mimeType);
+    } catch (error) {
+        console.error('❌ Failed to start:', error);
+        showAlert(error.message);
+        cleanupScreenShare();
+    }
     } catch (err) {
         console.error('Screen share error:', err);
         cleanupScreenShare();
@@ -1082,31 +1018,35 @@ async function startScreenShare() {
 }
 
 function cleanupScreenShare() {
-    // Stop live transcription
-    state.isLiveTranscribing = false;
-    state.lastProcessedChunkIndex = 0;
+    console.log('\n🛑 Cleaning up VAD resources...');
     
-    if (state.shareStream) {
-        state.shareStream.getTracks().forEach(t => t.stop());
-        state.shareStream = null;
+    // Stop VAD
+    if (state.vad) {
+        state.vad.pause();  // Pause but keep VAD loaded for reuse
     }
-    state.shareRecorder = null;
-    state.shareChunks = [];
+    
+    // Reset state
+    state.isLiveTranscribing = false;
+    state.isSpeaking = false;
+    
+    // Update UI
     els.startShareBtn.disabled = false;
     els.stopShareBtn.disabled = true;
     if (state.selectedFile && state.transcriber && !isAnyOperationInProgress()) {
         els.transcribeFileBtn.disabled = false;
     }
     els.progressText.textContent = '';
+    
+    console.log('✅ Cleanup complete');
 }
 
 function stopScreenShare() {
-    if (state.shareRecorder && state.shareRecorder.state === 'recording') {
-        state.shareRecorder.stop();
-    } else {
-        cleanupScreenShare();
-        setStatus('Capture stopped', false);
-    }
+    console.log('\n🛑 Stopping VAD recording...');
+    
+    cleanupScreenShare();
+    setStatus('✓ Recording stopped', false);
+    
+    console.log('✅ Recording stopped, transcript ready');
 }
 
 // Event handlers

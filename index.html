@@ -175,8 +175,14 @@
     console.log('Transformers.js loaded');
     console.log('Pipeline:', typeof pipeline);
     console.log('Env:', typeof env);
-    
-    // Load app after transformers.js is ready
+</script>
+
+<!-- Silero VAD for smart voice activity detection -->
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/ort.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.7/dist/bundle.min.js"></script>
+
+<script>
+    // Load app after all libraries are ready
     const appScript = document.createElement('script');
     appScript.src = 'js/app.js';
     document.body.appendChild(appScript);
