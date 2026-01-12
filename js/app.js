@@ -707,6 +707,23 @@ async function fileToFloat32(file) {
     }
 }
 
+// Simple voice activity detection based on audio energy
+function hasVoiceActivity(audioData) {
+    // Calculate RMS (root mean square) energy
+    let sumSquares = 0;
+    for (let i = 0; i < audioData.length; i++) {
+        sumSquares += audioData[i] * audioData[i];
+    }
+    const rms = Math.sqrt(sumSquares / audioData.length);
+    
+    // Threshold for voice activity (tune this value)
+    const threshold = 0.01;
+    
+    console.log(`🔊 Audio energy (RMS): ${rms.toFixed(4)}, threshold: ${threshold}`);
+    
+    return rms > threshold;
+}
+
 // Process accumulated chunks with timestamps to extract only new text
 async function processAccumulatedChunks() {
     if (!state.isLiveTranscribing || state.isTranscribing || state.shareChunks.length === 0) {
@@ -724,6 +741,26 @@ async function processAccumulatedChunks() {
         const totalDuration = float32Data.length / 16000;
         
         console.log(`📊 Total audio: ${totalDuration.toFixed(1)}s`);
+        
+        // Check for voice activity in NEW audio only
+        const newAudioStart = Math.floor(state.lastProcessedTimestamp * 16000);
+        const newAudioData = float32Data.slice(newAudioStart);
+        
+        if (newAudioData.length === 0) {
+            console.log('⏭️ No new audio to process');
+            state.isTranscribing = false;
+            return;
+        }
+        
+        if (!hasVoiceActivity(newAudioData)) {
+            console.log('⏭️ No voice activity in new audio, skipping');
+            // Still update timestamp to avoid re-checking same audio
+            state.lastProcessedTimestamp = totalDuration;
+            state.isTranscribing = false;
+            return;
+        }
+        
+        console.log('✅ Voice activity detected, transcribing...');
         
         // Transcribe with TIMESTAMPS enabled
         const language = els.languageSelect ? els.languageSelect.value : null;
@@ -1039,7 +1076,7 @@ async function startScreenShare() {
         }
         
         setStatus('Live transcription active…', true);
-        els.progressText.textContent = '🔴 Recording with live transcription - speak to see text appear every 10 seconds';
+        els.progressText.textContent = '🔴 Live transcription active - updates every 10s (Note: Browser models may have quality issues. For best results, stop recording and use file transcription)';
         
         // Start recording with 10-second chunks
         // This gives Whisper enough context to avoid hallucination
