@@ -751,24 +751,9 @@ async function processIncrementalAudio() {
             offset += chunk.length;
         }
         
-        // For first transcription, use all audio
-        // For updates, use last 30s with 10s overlap for context
-        let audioToProcess;
-        let isUpdate = false;
-        
-        if (state.lastProcessedSampleIndex === 0) {
-            // First transcription - use all audio
-            audioToProcess = allAudio;
-            console.log(`📊 First transcription: ${totalDuration.toFixed(1)}s`);
-        } else {
-            // Update - use last 30s for context, but only extract new text
-            const contextDuration = 30; // seconds
-            const contextSamples = contextDuration * 16000;
-            const startSample = Math.max(0, totalSamples - contextSamples);
-            audioToProcess = allAudio.slice(startSample);
-            isUpdate = true;
-            console.log(`📊 Update: using last ${(audioToProcess.length/16000).toFixed(1)}s for context`);
-        }
+        // Always transcribe ALL audio to get complete transcript
+        // Whisper handles long audio well with chunking
+        console.log(`📊 Transcribing complete audio: ${totalDuration.toFixed(1)}s`);
         
         // Transcribe with language detection
         const language = els.languageSelect ? els.languageSelect.value : null;
@@ -782,19 +767,14 @@ async function processIncrementalAudio() {
             options.language = language;
         }
         
-        const result = await state.transcriber(audioToProcess, options);
+        const result = await state.transcriber(allAudio, options);
         const transcribedText = result.text || '';
         
-        console.log(`✅ Transcribed: "${transcribedText}"`);
+        console.log(`✅ Transcribed (${transcribedText.length} chars): "${transcribedText.substring(0, 100)}${transcribedText.length > 100 ? '...' : ''}"`);
         
         if (transcribedText.trim()) {
-            if (isUpdate) {
-                // For updates, replace entire transcript (includes context)
-                state.currentTranscript = transcribedText;
-            } else {
-                // First transcription
-                state.currentTranscript = transcribedText;
-            }
+            // Always use complete transcript
+            state.currentTranscript = transcribedText;
             
             els.transcript.textContent = state.currentTranscript;
             els.transcript.scrollTop = els.transcript.scrollHeight;
