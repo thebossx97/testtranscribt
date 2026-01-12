@@ -704,21 +704,28 @@ async function fileToFloat32(file) {
 // Strategy: Accumulate ALL chunks and decode complete audio stream periodically
 // This works because WebM chunks aren't independently decodable
 async function processLiveChunk() {
+    console.log('🔍 processLiveChunk called - checking conditions...');
+    console.log('🔍 isLiveTranscribing:', state.isLiveTranscribing);
+    console.log('🔍 isTranscribing:', state.isTranscribing);
+    console.log('🔍 chunks:', state.shareChunks.length);
+    
     if (!state.isLiveTranscribing) {
-        console.log('Live transcription not active, skipping');
+        console.log('❌ Live transcription not active, skipping');
         return;
     }
     
     if (state.isTranscribing) {
-        console.log('Already transcribing, will process on next interval');
+        console.log('❌ Already transcribing, will process on next interval');
         return;
     }
     
     // Need at least some chunks to process
     if (state.shareChunks.length === 0) {
-        console.log('No chunks yet');
+        console.log('❌ No chunks yet');
         return;
     }
+    
+    console.log('✅ All checks passed, proceeding with processing...');
     
     try {
         state.isTranscribing = true;
@@ -984,16 +991,6 @@ async function startScreenShare() {
                 const chunkNum = state.shareChunks.length + 1;
                 console.log('📦 Audio chunk received:', e.data.size, 'bytes', 'Total chunks:', chunkNum);
                 state.shareChunks.push(e.data);
-                
-                // Process first chunk immediately for instant feedback
-                if (chunkNum === 1) {
-                    console.log('📦 First chunk - processing immediately for instant feedback');
-                    setTimeout(() => {
-                        processLiveChunk().catch(err => {
-                            console.error('First chunk processing error:', err);
-                        });
-                    }, 100);
-                }
             }
         };
         
