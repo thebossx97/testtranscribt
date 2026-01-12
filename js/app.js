@@ -103,7 +103,13 @@ const state = {
     isLiveTranscribing: false,
     liveTranscriptChunks: [],
     lastProcessedChunkIndex: 0,
-    liveProcessingInterval: null
+    liveProcessingInterval: null,
+    // Real-time audio capture
+    liveAudioContext: null,
+    liveAudioSource: null,
+    liveAudioProcessor: null,
+    liveAudioBuffer: [], // Accumulated Float32 samples
+    lastProcessedSampleIndex: 0
 };
 
 // Helper to check if any operation is in progress
@@ -700,58 +706,42 @@ async function fileToFloat32(file) {
     }
 }
 
-// Process live audio chunks for real-time transcription
-// Strategy: Accumulate ALL chunks and decode complete audio stream periodically
-// This works because WebM chunks aren't independently decodable
-async function processLiveChunk() {
-    console.log('🔍 processLiveChunk called - checking conditions...');
-    console.log('🔍 isLiveTranscribing:', state.isLiveTranscribing);
-    console.log('🔍 isTranscribing:', state.isTranscribing);
-    console.log('🔍 chunks:', state.shareChunks.length);
-    
-    if (!state.isLiveTranscribing) {
-        console.log('❌ Live transcription not active, skipping');
+// Process NEW audio incrementally for efficient real-time transcription
+async function processIncrementalAudio() {
+    if (!state.isLiveTranscribing || state.isTranscribing) {
         return;
     }
     
-    if (state.isTranscribing) {
-        console.log('❌ Already transcribing, will process on next interval');
+    // Calculate total samples captured
+    const totalSamples = state.liveAudioBuffer.reduce((sum, chunk) => sum + chunk.length, 0);
+    const newSamples = totalSamples - state.lastProcessedSampleIndex;
+    
+    // Need at least 3 seconds of new audio (48000 samples at 16kHz)
+    if (newSamples < 48000) {
+        console.log(`⏭️ Only ${(newSamples/16000).toFixed(1)}s of new audio, waiting for more...`);
         return;
     }
-    
-    // Need at least some chunks to process
-    if (state.shareChunks.length === 0) {
-        console.log('❌ No chunks yet');
-        return;
-    }
-    
-    console.log('✅ All checks passed, proceeding with processing...');
     
     try {
         state.isTranscribing = true;
         
-        console.log(`\n=== Processing complete audio (${state.shareChunks.length} chunks accumulated) ===`);
+        const newDuration = newSamples / 16000;
+        console.log(`\n🎵 Processing ${newDuration.toFixed(1)}s of NEW audio (${newSamples} samples)`);
         
-        // Combine ALL chunks into complete audio stream
-        const blob = new Blob(state.shareChunks, { type: state.shareChunks[0].type });
-        console.log('Total blob size:', blob.size, 'bytes, type:', blob.type);
-        
-        // Decode the COMPLETE audio stream
-        console.log('Decoding complete audio stream...');
-        const float32Data = await blobToFloat32(blob);
-        const durationSec = float32Data.length / 16000;
-        console.log('Audio decoded:', float32Data.length, 'samples', `(${durationSec.toFixed(1)}s)`);
-        
-        // Transcribe complete audio
-        if (!state.transcriber) {
-            console.warn('Transcriber not available');
-            state.isTranscribing = false;
-            return;
+        // Combine all buffer chunks into single Float32Array
+        const allAudio = new Float32Array(totalSamples);
+        let offset = 0;
+        for (const chunk of state.liveAudioBuffer) {
+            allAudio.set(chunk, offset);
+            offset += chunk.length;
         }
         
-        console.log('Transcribing complete audio...');
+        // Extract only NEW audio since last processing
+        const newAudio = allAudio.slice(state.lastProcessedSampleIndex);
         
-        // Get selected language
+        console.log(`📊 Total: ${(totalSamples/16000).toFixed(1)}s, Processing: ${(newAudio.length/16000).toFixed(1)}s`);
+        
+        // Transcribe only the NEW audio
         const language = els.languageSelect ? els.languageSelect.value : null;
         const options = {
             chunk_length_s: 30,
@@ -761,45 +751,35 @@ async function processLiveChunk() {
         
         if (language) {
             options.language = language;
-            console.log('Using language:', language);
-        } else {
-            console.log('Using auto-detect language');
         }
         
-        const result = await state.transcriber(float32Data, options);
+        const result = await state.transcriber(newAudio, options);
+        const newText = result.text || '';
         
-        const fullText = result.text || '';
-        console.log('✓ Transcription complete. Text length:', fullText.length);
-        console.log('Full text:', fullText);
+        console.log(`✅ Transcribed: "${newText}"`);
         
-        // Update with complete transcript
-        if (fullText.trim()) {
-            state.currentTranscript = fullText;
+        // Append new text to existing transcript
+        if (newText.trim()) {
+            if (state.currentTranscript.trim()) {
+                state.currentTranscript += ' ' + newText;
+            } else {
+                state.currentTranscript = newText;
+            }
             
-            // Update display
             els.transcript.textContent = state.currentTranscript;
-            
-            // Auto-scroll to bottom
             els.transcript.scrollTop = els.transcript.scrollHeight;
             
-            // Update status with duration
-            setStatus(`Live transcription active (${durationSec.toFixed(0)}s)…`, true);
-        } else {
-            console.log('No text yet (silence or noise)');
+            const totalDuration = totalSamples / 16000;
+            setStatus(`Live transcription (${totalDuration.toFixed(0)}s)…`, true);
         }
         
-    } catch (err) {
-        console.error('❌ Error processing live audio:', err);
-        console.error('Error type:', err.name);
-        console.error('Error message:', err.message);
+        // Mark these samples as processed
+        state.lastProcessedSampleIndex = totalSamples;
         
-        // Continue on error - will retry on next interval
-        console.log('Will retry on next interval');
+    } catch (err) {
+        console.error('❌ Incremental processing error:', err);
     } finally {
         state.isTranscribing = false;
-        console.log('=== Live processing complete ===');
-        console.log('State: isTranscribing =', state.isTranscribing, 'isLiveTranscribing =', state.isLiveTranscribing);
-        console.log('Next processing in 10 seconds...\n');
     }
 }
 
@@ -971,8 +951,8 @@ async function startScreenShare() {
         
         state.shareStream = stream;
         state.shareChunks = [];
-        state.liveTranscriptChunks = [];
-        state.lastProcessedChunkIndex = 0;
+        state.liveAudioBuffer = [];
+        state.lastProcessedSampleIndex = 0;
         state.isLiveTranscribing = true;
         
         // Clear transcript for live updates
@@ -983,30 +963,41 @@ async function startScreenShare() {
         const audioStream = new MediaStream();
         audioTracks.forEach(track => audioStream.addTrack(track));
         
-        // Record only audio
-        state.shareRecorder = new MediaRecorder(audioStream, { mimeType });
+        // Set up AudioContext for real-time PCM capture
+        state.liveAudioContext = new AudioContext({ sampleRate: 16000 });
+        state.liveAudioSource = state.liveAudioContext.createMediaStreamSource(audioStream);
         
+        // Use ScriptProcessorNode for real-time audio capture
+        const bufferSize = 4096;
+        state.liveAudioProcessor = state.liveAudioContext.createScriptProcessor(bufferSize, 1, 1);
+        
+        state.liveAudioProcessor.onaudioprocess = (e) => {
+            const inputData = e.inputBuffer.getChannelData(0);
+            // Copy to our buffer
+            state.liveAudioBuffer.push(new Float32Array(inputData));
+        };
+        
+        // Connect audio pipeline
+        state.liveAudioSource.connect(state.liveAudioProcessor);
+        state.liveAudioProcessor.connect(state.liveAudioContext.destination);
+        
+        // Also record for final backup
+        state.shareRecorder = new MediaRecorder(audioStream, { mimeType });
         state.shareRecorder.ondataavailable = (e) => {
             if (e.data && e.data.size > 0) {
-                const chunkNum = state.shareChunks.length + 1;
-                console.log('📦 Audio chunk received:', e.data.size, 'bytes', 'Total chunks:', chunkNum);
                 state.shareChunks.push(e.data);
             }
         };
         
-        // Process complete audio every 10 seconds
-        console.log('⏰ Setting up 10-second interval for live processing');
+        // Process NEW audio every 5 seconds
+        console.log('⏰ Setting up 5-second interval for incremental processing');
         state.liveProcessInterval = setInterval(() => {
-            console.log('⏰ Interval fired! isLiveTranscribing:', state.isLiveTranscribing, 'chunks:', state.shareChunks.length);
-            if (state.isLiveTranscribing && state.shareChunks.length > 0) {
-                console.log('⏰ Triggering processLiveChunk...');
-                processLiveChunk().catch(err => {
+            if (state.isLiveTranscribing && state.liveAudioBuffer.length > 0) {
+                processIncrementalAudio().catch(err => {
                     console.error('Live processing error:', err);
                 });
-            } else {
-                console.log('⏰ Skipping - not ready yet');
             }
-        }, 10000);
+        }, 5000);
         
         state.shareRecorder.onstop = async () => {
             try {
@@ -1017,37 +1008,52 @@ async function startScreenShare() {
                     state.liveProcessInterval = null;
                 }
                 
-                if (state.shareChunks.length === 0) {
-                    throw new Error('No audio data captured');
-                }
+                console.log('Recording stopped.');
                 
-                console.log('Recording stopped. Total chunks:', state.shareChunks.length);
-                console.log('Processing final complete audio...');
-                els.progressText.textContent = 'Finalizing transcription…';
-                
-                // Process all chunks one final time for complete transcript
-                const blob = new Blob(state.shareChunks, { type: mimeType });
-                const float32 = await blobToFloat32(blob);
-                
-                // Get selected language
-                const language = els.languageSelect ? els.languageSelect.value : null;
-                const options = {
-                    chunk_length_s: 30,
-                    stride_length_s: 5,
-                    return_timestamps: false
-                };
-                
-                if (language) {
-                    options.language = language;
-                }
-                
-                // Final transcription
-                const result = await state.transcriber(float32, options);
-                
-                const finalText = result.text || '';
-                if (finalText.trim()) {
-                    state.currentTranscript = finalText;
-                    els.transcript.textContent = state.currentTranscript;
+                // Process any remaining audio
+                if (state.liveAudioBuffer.length > 0) {
+                    const totalSamples = state.liveAudioBuffer.reduce((sum, chunk) => sum + chunk.length, 0);
+                    const remainingSamples = totalSamples - state.lastProcessedSampleIndex;
+                    
+                    if (remainingSamples > 16000) { // At least 1 second
+                        console.log(`Processing final ${(remainingSamples/16000).toFixed(1)}s...`);
+                        els.progressText.textContent = 'Finalizing transcription…';
+                        
+                        // Combine all audio
+                        const allAudio = new Float32Array(totalSamples);
+                        let offset = 0;
+                        for (const chunk of state.liveAudioBuffer) {
+                            allAudio.set(chunk, offset);
+                            offset += chunk.length;
+                        }
+                        
+                        // Get remaining audio
+                        const remainingAudio = allAudio.slice(state.lastProcessedSampleIndex);
+                        
+                        // Transcribe
+                        const language = els.languageSelect ? els.languageSelect.value : null;
+                        const options = {
+                            chunk_length_s: 30,
+                            stride_length_s: 5,
+                            return_timestamps: false
+                        };
+                        
+                        if (language) {
+                            options.language = language;
+                        }
+                        
+                        const result = await state.transcriber(remainingAudio, options);
+                        const finalText = result.text || '';
+                        
+                        if (finalText.trim()) {
+                            if (state.currentTranscript.trim()) {
+                                state.currentTranscript += ' ' + finalText;
+                            } else {
+                                state.currentTranscript = finalText;
+                            }
+                            els.transcript.textContent = state.currentTranscript;
+                        }
+                    }
                 }
                 
                 els.progressText.textContent = '✓ Live transcription complete';
@@ -1114,8 +1120,23 @@ function cleanupScreenShare() {
         clearInterval(state.liveProcessInterval);
         state.liveProcessInterval = null;
     }
-    state.liveTranscriptChunks = [];
-    state.lastProcessedChunkIndex = 0;
+    
+    // Clean up AudioContext
+    if (state.liveAudioProcessor) {
+        state.liveAudioProcessor.disconnect();
+        state.liveAudioProcessor = null;
+    }
+    if (state.liveAudioSource) {
+        state.liveAudioSource.disconnect();
+        state.liveAudioSource = null;
+    }
+    if (state.liveAudioContext) {
+        state.liveAudioContext.close().catch(err => console.warn('Failed to close live AudioContext:', err));
+        state.liveAudioContext = null;
+    }
+    
+    state.liveAudioBuffer = [];
+    state.lastProcessedSampleIndex = 0;
     
     if (state.shareStream) {
         state.shareStream.getTracks().forEach(t => t.stop());
