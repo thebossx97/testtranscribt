@@ -101,16 +101,7 @@ const state = {
     allModelsLoaded: false,
     // Live transcription state
     isLiveTranscribing: false,
-    liveTranscriptChunks: [],
-    lastProcessedChunkIndex: 0,
-    liveProcessingInterval: null,
-    // Real-time audio capture
-    liveAudioContext: null,
-    liveAudioSource: null,
-    liveAudioProcessor: null,
-    liveAudioBuffer: [], // Accumulated Float32 samples
-    lastProcessedSampleIndex: 0,
-    lastProcessedTimestamp: 0 // Track last timestamp we've extracted text for
+    lastProcessedChunkIndex: 0  // Track which chunks we've already transcribed
 };
 
 // Helper to check if any operation is in progress
@@ -724,50 +715,62 @@ function hasVoiceActivity(audioData) {
     return rms > threshold;
 }
 
-// Process accumulated chunks with timestamps to extract only new text
+// Remove duplicate segments from transcript
+function removeDuplicateSegments(text) {
+    const sentences = text.split(/[.!?]\s+/);
+    const seen = new Set();
+    return sentences.filter(sentence => {
+        const normalized = sentence.trim().toLowerCase();
+        if (!normalized || seen.has(normalized)) return false;
+        seen.add(normalized);
+        return true;
+    }).join('. ') + (text.endsWith('.') || text.endsWith('!') || text.endsWith('?') ? '' : '.');
+}
+
+// Process only NEW chunks with sliding window approach
 async function processAccumulatedChunks() {
     if (!state.isLiveTranscribing || state.isTranscribing || state.shareChunks.length === 0) {
+        return;
+    }
+    
+    // Track which chunks we've already processed
+    const processedChunkCount = state.lastProcessedChunkIndex || 0;
+    const newChunks = state.shareChunks.slice(processedChunkCount);
+    
+    if (newChunks.length === 0) {
+        console.log('⏭️ No new chunks to process');
         return;
     }
     
     try {
         state.isTranscribing = true;
         
-        console.log(`\n🎵 Processing ${state.shareChunks.length} chunks`);
+        console.log(`\n🎵 Processing ${newChunks.length} NEW chunks (${processedChunkCount} already processed)`);
         
-        // Combine all chunks into complete audio
-        const blob = new Blob(state.shareChunks, { type: state.shareChunks[0].type });
+        // Process ONLY the new chunks
+        const blob = new Blob(newChunks, { type: newChunks[0].type });
         const float32Data = await blobToFloat32(blob);
-        const totalDuration = float32Data.length / 16000;
+        const duration = float32Data.length / 16000;
         
-        console.log(`📊 Total audio: ${totalDuration.toFixed(1)}s`);
+        console.log(`📊 New audio: ${duration.toFixed(1)}s`);
         
-        // Check for voice activity in NEW audio only
-        const newAudioStart = Math.floor(state.lastProcessedTimestamp * 16000);
-        const newAudioData = float32Data.slice(newAudioStart);
-        
-        if (newAudioData.length === 0) {
-            console.log('⏭️ No new audio to process');
-            state.isTranscribing = false;
-            return;
-        }
-        
-        if (!hasVoiceActivity(newAudioData)) {
+        // Check for voice activity
+        if (!hasVoiceActivity(float32Data)) {
             console.log('⏭️ No voice activity in new audio, skipping');
-            // Still update timestamp to avoid re-checking same audio
-            state.lastProcessedTimestamp = totalDuration;
+            state.lastProcessedChunkIndex = state.shareChunks.length;
             state.isTranscribing = false;
             return;
         }
         
-        console.log('✅ Voice activity detected, transcribing...');
+        console.log('✅ Voice activity detected, transcribing NEW audio only...');
         
-        // Transcribe with TIMESTAMPS enabled
+        // Transcribe ONLY the new audio with condition_on_previous_text: false
         const language = els.languageSelect ? els.languageSelect.value : null;
         const options = {
             chunk_length_s: 30,
             stride_length_s: 5,
-            return_timestamps: true // Enable timestamps to extract new text
+            return_timestamps: false,
+            condition_on_previous_text: false  // Critical: prevents repetition
         };
         
         if (language) {
@@ -775,35 +778,9 @@ async function processAccumulatedChunks() {
         }
         
         const result = await state.transcriber(float32Data, options);
+        const newText = result.text || '';
         
-        console.log('✅ Transcription result:', result);
-        
-        // Extract text from chunks that are after our last processed timestamp
-        let newText = '';
-        
-        if (result.chunks && Array.isArray(result.chunks)) {
-            console.log(`📝 Found ${result.chunks.length} chunks`);
-            
-            for (const chunk of result.chunks) {
-                const chunkStart = chunk.timestamp[0];
-                const chunkEnd = chunk.timestamp[1];
-                const chunkText = chunk.text;
-                
-                console.log(`  Chunk [${chunkStart?.toFixed(1)}s - ${chunkEnd?.toFixed(1)}s]: "${chunkText}"`);
-                
-                // Only include chunks that start after our last processed timestamp
-                if (chunkStart !== null && chunkStart >= state.lastProcessedTimestamp) {
-                    newText += chunkText;
-                    state.lastProcessedTimestamp = chunkEnd || chunkStart;
-                }
-            }
-        } else {
-            // Fallback if no chunks (shouldn't happen with return_timestamps: true)
-            newText = result.text || '';
-            state.lastProcessedTimestamp = totalDuration;
-        }
-        
-        console.log(`✅ New text (${newText.length} chars): "${newText}"`);
+        console.log(`✅ New text (${newText.length} chars): "${newText.substring(0, 100)}${newText.length > 100 ? '...' : ''}"`);
         
         // Append new text to existing transcript
         if (newText.trim()) {
@@ -813,11 +790,18 @@ async function processAccumulatedChunks() {
                 state.currentTranscript = newText.trim();
             }
             
+            // Apply post-processing to remove any duplicates
+            state.currentTranscript = removeDuplicateSegments(state.currentTranscript);
+            
             els.transcript.textContent = state.currentTranscript;
             els.transcript.scrollTop = els.transcript.scrollHeight;
             
-            setStatus(`Live transcription (${totalDuration.toFixed(0)}s)…`, true);
+            const totalDuration = (state.shareChunks.length * 15); // Approximate
+            setStatus(`Live transcription (~${Math.floor(totalDuration)}s)…`, true);
         }
+        
+        // Mark these chunks as processed
+        state.lastProcessedChunkIndex = state.shareChunks.length;
         
     } catch (err) {
         console.error('❌ Processing error:', err);
@@ -859,7 +843,8 @@ async function transcribeFloat32(float32Data) {
         const options = {
             chunk_length_s: 30,
             stride_length_s: 5,
-            return_timestamps: false
+            return_timestamps: false,
+            condition_on_previous_text: false  // Critical: prevents hallucination/repetition
         };
         
         // Add language if specified
@@ -994,7 +979,7 @@ async function startScreenShare() {
         
         state.shareStream = stream;
         state.shareChunks = [];
-        state.lastProcessedTimestamp = 0;
+        state.lastProcessedChunkIndex = 0;
         state.isLiveTranscribing = true;
         
         // Clear transcript for live updates
@@ -1076,12 +1061,12 @@ async function startScreenShare() {
         }
         
         setStatus('Live transcription active…', true);
-        els.progressText.textContent = '🔴 Live transcription active - updates every 10s (Note: Browser models may have quality issues. For best results, stop recording and use file transcription)';
+        els.progressText.textContent = '🔴 Live transcription active - updates every 15s';
         
-        // Start recording with 10-second chunks
-        // This gives Whisper enough context to avoid hallucination
-        state.shareRecorder.start(10000);
-        console.log('🎙️ Live transcription started (10s chunks) with mime type:', mimeType);
+        // Start recording with 15-second chunks (optimal for Whisper)
+        // Research shows 15s minimum reduces hallucination
+        state.shareRecorder.start(15000);
+        console.log('🎙️ Live transcription started (15s chunks) with mime type:', mimeType);
     } catch (err) {
         console.error('Screen share error:', err);
         cleanupScreenShare();
@@ -1099,7 +1084,7 @@ async function startScreenShare() {
 function cleanupScreenShare() {
     // Stop live transcription
     state.isLiveTranscribing = false;
-    state.lastProcessedTimestamp = 0;
+    state.lastProcessedChunkIndex = 0;
     
     if (state.shareStream) {
         state.shareStream.getTracks().forEach(t => t.stop());
