@@ -702,12 +702,19 @@ async function fileToFloat32(file) {
 
 // Process live audio chunks for real-time transcription
 async function processLiveChunk() {
-    if (!state.isLiveTranscribing || state.isTranscribing) {
+    if (!state.isLiveTranscribing) {
+        console.log('Live transcription not active, skipping');
+        return;
+    }
+    
+    if (state.isTranscribing) {
+        console.log('Already transcribing, will process on next chunk');
         return;
     }
     
     // Check if we have new chunks to process
     if (state.lastProcessedChunkIndex >= state.shareChunks.length) {
+        console.log('No new chunks to process');
         return;
     }
     
@@ -721,13 +728,16 @@ async function processLiveChunk() {
             return;
         }
         
-        console.log(`Processing ${newChunks.length} new chunks (${state.lastProcessedChunkIndex} already processed)`);
+        console.log(`\n=== Processing ${newChunks.length} new chunks (${state.lastProcessedChunkIndex} already processed) ===`);
         
         // Combine only NEW chunks into a blob
         const blob = new Blob(newChunks, { type: newChunks[0].type });
+        console.log('Blob size:', blob.size, 'bytes, type:', blob.type);
         
         // Convert to audio data
+        console.log('Decoding audio...');
         const float32Data = await blobToFloat32(blob);
+        console.log('Audio decoded:', float32Data.length, 'samples');
         
         // Transcribe only the NEW audio
         if (!state.transcriber) {
@@ -757,7 +767,8 @@ async function processLiveChunk() {
         const result = await state.transcriber(float32Data, options);
         
         const newText = result.text || '';
-        console.log('New text:', newText.substring(0, 100));
+        console.log('✓ Transcription complete. New text length:', newText.length);
+        console.log('New text:', newText);
         
         // Append new text to existing transcript
         if (newText.trim()) {
@@ -768,22 +779,35 @@ async function processLiveChunk() {
                 state.currentTranscript = newText;
             }
             
+            console.log('Total transcript length:', state.currentTranscript.length);
+            
             // Update display
             els.transcript.textContent = state.currentTranscript;
             
             // Auto-scroll to bottom
             els.transcript.scrollTop = els.transcript.scrollHeight;
+            
+            // Update status
+            setStatus('Live transcription active…', true);
+        } else {
+            console.log('No text in this chunk (silence or noise)');
         }
         
         // Mark these chunks as processed
         state.lastProcessedChunkIndex = state.shareChunks.length;
+        console.log('Marked chunks as processed. Next will start from:', state.lastProcessedChunkIndex);
         
     } catch (err) {
-        console.error('Error processing live chunk:', err);
-        // If decode fails, it might be incomplete chunk - wait for next one
-        console.log('Will retry with next chunk batch');
+        console.error('❌ Error processing live chunk:', err);
+        console.error('Error type:', err.name);
+        console.error('Error message:', err.message);
+        
+        // Don't mark as processed if there was an error
+        // Will retry with more chunks next time
+        console.log('Will retry with next chunk batch (not marking as processed)');
     } finally {
         state.isTranscribing = false;
+        console.log('=== Live chunk processing complete ===\n');
     }
 }
 
@@ -972,14 +996,17 @@ async function startScreenShare() {
         
         state.shareRecorder.ondataavailable = (e) => {
             if (e.data && e.data.size > 0) {
-                console.log('Audio chunk received:', e.data.size, 'bytes');
+                console.log('Audio chunk received:', e.data.size, 'bytes', 'Total chunks:', state.shareChunks.length + 1);
                 state.shareChunks.push(e.data);
                 
                 // Trigger live processing for this chunk
+                // Use setTimeout to avoid blocking the recorder
                 if (state.isLiveTranscribing) {
-                    processLiveChunk().catch(err => {
-                        console.error('Live processing error:', err);
-                    });
+                    setTimeout(() => {
+                        processLiveChunk().catch(err => {
+                            console.error('Live processing error (will retry on next chunk):', err);
+                        });
+                    }, 100);
                 }
             }
         };
