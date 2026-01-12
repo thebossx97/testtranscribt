@@ -701,6 +701,8 @@ async function fileToFloat32(file) {
 }
 
 // Process live audio chunks for real-time transcription
+// Strategy: Accumulate ALL chunks and decode complete audio stream periodically
+// This works because WebM chunks aren't independently decodable
 async function processLiveChunk() {
     if (!state.isLiveTranscribing) {
         console.log('Live transcription not active, skipping');
@@ -708,45 +710,39 @@ async function processLiveChunk() {
     }
     
     if (state.isTranscribing) {
-        console.log('Already transcribing, will process on next chunk');
+        console.log('Already transcribing, will process on next interval');
         return;
     }
     
-    // Check if we have new chunks to process
-    if (state.lastProcessedChunkIndex >= state.shareChunks.length) {
-        console.log('No new chunks to process');
+    // Need at least some chunks to process
+    if (state.shareChunks.length === 0) {
+        console.log('No chunks yet');
         return;
     }
     
     try {
         state.isTranscribing = true;
         
-        // Get only NEW chunks since last processing
-        const newChunks = state.shareChunks.slice(state.lastProcessedChunkIndex);
-        if (newChunks.length === 0) {
-            state.isTranscribing = false;
-            return;
-        }
+        console.log(`\n=== Processing complete audio (${state.shareChunks.length} chunks accumulated) ===`);
         
-        console.log(`\n=== Processing ${newChunks.length} new chunks (${state.lastProcessedChunkIndex} already processed) ===`);
+        // Combine ALL chunks into complete audio stream
+        const blob = new Blob(state.shareChunks, { type: state.shareChunks[0].type });
+        console.log('Total blob size:', blob.size, 'bytes, type:', blob.type);
         
-        // Combine only NEW chunks into a blob
-        const blob = new Blob(newChunks, { type: newChunks[0].type });
-        console.log('Blob size:', blob.size, 'bytes, type:', blob.type);
-        
-        // Convert to audio data
-        console.log('Decoding audio...');
+        // Decode the COMPLETE audio stream
+        console.log('Decoding complete audio stream...');
         const float32Data = await blobToFloat32(blob);
-        console.log('Audio decoded:', float32Data.length, 'samples');
+        const durationSec = float32Data.length / 16000;
+        console.log('Audio decoded:', float32Data.length, 'samples', `(${durationSec.toFixed(1)}s)`);
         
-        // Transcribe only the NEW audio
+        // Transcribe complete audio
         if (!state.transcriber) {
             console.warn('Transcriber not available');
             state.isTranscribing = false;
             return;
         }
         
-        console.log('Transcribing new audio chunk...');
+        console.log('Transcribing complete audio...');
         
         // Get selected language
         const language = els.languageSelect ? els.languageSelect.value : null;
@@ -756,7 +752,6 @@ async function processLiveChunk() {
             return_timestamps: false
         };
         
-        // Add language if specified (null = auto-detect)
         if (language) {
             options.language = language;
             console.log('Using language:', language);
@@ -766,20 +761,13 @@ async function processLiveChunk() {
         
         const result = await state.transcriber(float32Data, options);
         
-        const newText = result.text || '';
-        console.log('✓ Transcription complete. New text length:', newText.length);
-        console.log('New text:', newText);
+        const fullText = result.text || '';
+        console.log('✓ Transcription complete. Text length:', fullText.length);
+        console.log('Full text:', fullText);
         
-        // Append new text to existing transcript
-        if (newText.trim()) {
-            // Add space if we already have text
-            if (state.currentTranscript.trim()) {
-                state.currentTranscript += ' ' + newText;
-            } else {
-                state.currentTranscript = newText;
-            }
-            
-            console.log('Total transcript length:', state.currentTranscript.length);
+        // Update with complete transcript
+        if (fullText.trim()) {
+            state.currentTranscript = fullText;
             
             // Update display
             els.transcript.textContent = state.currentTranscript;
@@ -787,27 +775,22 @@ async function processLiveChunk() {
             // Auto-scroll to bottom
             els.transcript.scrollTop = els.transcript.scrollHeight;
             
-            // Update status
-            setStatus('Live transcription active…', true);
+            // Update status with duration
+            setStatus(`Live transcription active (${durationSec.toFixed(0)}s)…`, true);
         } else {
-            console.log('No text in this chunk (silence or noise)');
+            console.log('No text yet (silence or noise)');
         }
         
-        // Mark these chunks as processed
-        state.lastProcessedChunkIndex = state.shareChunks.length;
-        console.log('Marked chunks as processed. Next will start from:', state.lastProcessedChunkIndex);
-        
     } catch (err) {
-        console.error('❌ Error processing live chunk:', err);
+        console.error('❌ Error processing live audio:', err);
         console.error('Error type:', err.name);
         console.error('Error message:', err.message);
         
-        // Don't mark as processed if there was an error
-        // Will retry with more chunks next time
-        console.log('Will retry with next chunk batch (not marking as processed)');
+        // Continue on error - will retry on next interval
+        console.log('Will retry on next interval');
     } finally {
         state.isTranscribing = false;
-        console.log('=== Live chunk processing complete ===\n');
+        console.log('=== Live processing complete ===\n');
     }
 }
 
@@ -998,51 +981,58 @@ async function startScreenShare() {
             if (e.data && e.data.size > 0) {
                 console.log('Audio chunk received:', e.data.size, 'bytes', 'Total chunks:', state.shareChunks.length + 1);
                 state.shareChunks.push(e.data);
-                
-                // Trigger live processing for this chunk
-                // Use setTimeout to avoid blocking the recorder
-                if (state.isLiveTranscribing) {
-                    setTimeout(() => {
-                        processLiveChunk().catch(err => {
-                            console.error('Live processing error (will retry on next chunk):', err);
-                        });
-                    }, 100);
-                }
             }
         };
         
+        // Process complete audio every 10 seconds
+        state.liveProcessInterval = setInterval(() => {
+            if (state.isLiveTranscribing && state.shareChunks.length > 0) {
+                processLiveChunk().catch(err => {
+                    console.error('Live processing error:', err);
+                });
+            }
+        }, 10000);
+        
         state.shareRecorder.onstop = async () => {
             try {
-                // Stop live transcription
+                // Stop live transcription and interval
                 state.isLiveTranscribing = false;
+                if (state.liveProcessInterval) {
+                    clearInterval(state.liveProcessInterval);
+                    state.liveProcessInterval = null;
+                }
                 
                 if (state.shareChunks.length === 0) {
                     throw new Error('No audio data captured');
                 }
                 
                 console.log('Recording stopped. Total chunks:', state.shareChunks.length);
+                console.log('Processing final complete audio...');
+                els.progressText.textContent = 'Finalizing transcription…';
                 
-                // Process one final time to get complete transcript
-                if (state.lastProcessedChunkIndex < state.shareChunks.length) {
-                    console.log('Processing final complete audio...');
-                    els.progressText.textContent = 'Finalizing transcription…';
-                    
-                    // Process all chunks one last time
-                    const blob = new Blob(state.shareChunks, { type: mimeType });
-                    const float32 = await blobToFloat32(blob);
-                    
-                    // Final transcription
-                    const result = await state.transcriber(float32, {
-                        chunk_length_s: 30,
-                        stride_length_s: 5,
-                        return_timestamps: false
-                    });
-                    
-                    const finalText = result.text || '';
-                    if (finalText.trim()) {
-                        state.currentTranscript = finalText;
-                        els.transcript.textContent = state.currentTranscript;
-                    }
+                // Process all chunks one final time for complete transcript
+                const blob = new Blob(state.shareChunks, { type: mimeType });
+                const float32 = await blobToFloat32(blob);
+                
+                // Get selected language
+                const language = els.languageSelect ? els.languageSelect.value : null;
+                const options = {
+                    chunk_length_s: 30,
+                    stride_length_s: 5,
+                    return_timestamps: false
+                };
+                
+                if (language) {
+                    options.language = language;
+                }
+                
+                // Final transcription
+                const result = await state.transcriber(float32, options);
+                
+                const finalText = result.text || '';
+                if (finalText.trim()) {
+                    state.currentTranscript = finalText;
+                    els.transcript.textContent = state.currentTranscript;
                 }
                 
                 els.progressText.textContent = '✓ Live transcription complete';
@@ -1101,8 +1091,12 @@ async function startScreenShare() {
 }
 
 function cleanupScreenShare() {
-    // Stop live transcription
+    // Stop live transcription and interval
     state.isLiveTranscribing = false;
+    if (state.liveProcessInterval) {
+        clearInterval(state.liveProcessInterval);
+        state.liveProcessInterval = null;
+    }
     state.liveTranscriptChunks = [];
     state.lastProcessedChunkIndex = 0;
     
