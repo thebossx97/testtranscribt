@@ -837,8 +837,36 @@ async function transcribeUtteranceWithDiarization(audioFloat32, startTime, featu
     }
 }
 
+// Normalize features to reduce noise and improve clustering
+function normalizeFeatures(features) {
+    // Clamp pitch to reasonable human range (80-400 Hz)
+    const pitch = Math.max(80, Math.min(400, features.pitch || 150));
+    
+    // Clamp formant
+    const formant = Math.max(0, Math.min(100, features.formant || 0));
+    
+    // Energy already normalized by RMS
+    const energy = Math.max(0, Math.min(1, features.energy || 0));
+    
+    // Spectral bands already normalized to sum to 1
+    return {
+        pitch,
+        formant,
+        energy,
+        lowBand: features.lowBand || 0,
+        midBand: features.midBand || 0,
+        highBand: features.highBand || 0,
+        pitchVariance: Math.max(0, Math.min(1000, features.pitchVariance || 0)),
+        energyVariance: features.energyVariance || 0,
+        duration: features.duration || 0
+    };
+}
+
 // Speaker identification using advanced feature clustering
-function identifySpeaker(features) {
+function identifySpeaker(rawFeatures) {
+    // Normalize features to reduce noise
+    const features = normalizeFeatures(rawFeatures);
+    
     // Log features for debugging
     console.log('📊 Speaker features:', {
         pitch: features.pitch?.toFixed(1),
@@ -873,14 +901,22 @@ function identifySpeaker(features) {
     
     distances.sort((a, b) => a.distance - b.distance);
     const closest = distances[0];
+    const secondClosest = distances[1];
     
-    // Adaptive threshold based on number of speakers
-    const baseThreshold = 0.20;
-    const adaptiveThreshold = baseThreshold * (1 + state.speakers.length * 0.05);
+    // More conservative threshold to prevent over-segmentation
+    const baseThreshold = 0.35;  // Increased from 0.20
+    const adaptiveThreshold = baseThreshold * (1 + state.speakers.length * 0.03);  // Reduced multiplier
+    
+    // Require significant separation from second-closest speaker
+    const separationRatio = secondClosest ? (secondClosest.distance / closest.distance) : 2.0;
+    const requiresClearSeparation = separationRatio < 1.3;  // If too close to second speaker, be conservative
     
     console.log(`🎯 Closest: Speaker ${closest.id + 1} (distance: ${closest.distance.toFixed(3)}, threshold: ${adaptiveThreshold.toFixed(3)})`);
+    if (secondClosest) {
+        console.log(`   Second: Speaker ${secondClosest.id + 1} (distance: ${secondClosest.distance.toFixed(3)}, separation: ${separationRatio.toFixed(2)}x)`);
+    }
     
-    if (closest.distance < adaptiveThreshold) {
+    if (closest.distance < adaptiveThreshold && !requiresClearSeparation) {
         // Assign to existing speaker with confidence-weighted update
         const speaker = state.speakers[closest.id];
         speaker.utteranceCount++;
@@ -978,6 +1014,48 @@ function updateDiarizedTranscript() {
     
     // Update current transcript for compatibility
     state.currentTranscript = formatted.trim();
+    
+    // Update meeting stats
+    updateMeetingStats();
+}
+
+// Update meeting statistics display
+function updateMeetingStats() {
+    const statsDiv = document.getElementById('meetingStats');
+    
+    if (state.utterances.length === 0) {
+        if (statsDiv) statsDiv.style.display = 'none';
+        return;
+    }
+    
+    // Show stats
+    if (statsDiv) statsDiv.style.display = 'block';
+    
+    // Calculate duration (from first to last utterance)
+    const firstTime = state.utterances[0].timestamp;
+    const lastUtt = state.utterances[state.utterances.length - 1];
+    const lastTime = lastUtt.timestamp + (lastUtt.duration || 0);
+    const durationSec = Math.floor(lastTime - firstTime);
+    
+    const mins = Math.floor(durationSec / 60);
+    const secs = durationSec % 60;
+    const durationStr = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    
+    // Count words
+    const totalWords = state.utterances.reduce((sum, utt) => {
+        return sum + utt.text.split(/\s+/).filter(w => w.length > 0).length;
+    }, 0);
+    
+    // Update display
+    const statDuration = document.getElementById('statDuration');
+    const statSpeakers = document.getElementById('statSpeakers');
+    const statUtterances = document.getElementById('statUtterances');
+    const statWords = document.getElementById('statWords');
+    
+    if (statDuration) statDuration.textContent = durationStr;
+    if (statSpeakers) statSpeakers.textContent = state.speakers.length.toString();
+    if (statUtterances) statUtterances.textContent = state.utterances.length.toString();
+    if (statWords) statWords.textContent = totalWords.toString();
 }
 
 function formatTimestamp(seconds) {

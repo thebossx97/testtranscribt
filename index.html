@@ -116,6 +116,28 @@
                 <div id="progressFill" style="height: 100%; background: linear-gradient(90deg, var(--color-teal-500), var(--color-teal-600)); width: 0%; transition: width 0.3s ease;"></div>
             </div>
 
+            <!-- Meeting Stats -->
+            <div id="meetingStats" style="display: none; margin-bottom: 12px; padding: 12px; background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 8px;">
+                <div style="display: flex; gap: 20px; font-size: 13px; color: var(--color-gray-300);">
+                    <div>
+                        <span style="color: var(--color-gray-500);">Duration:</span>
+                        <strong id="statDuration" style="color: var(--color-blue-400); margin-left: 4px;">00:00</strong>
+                    </div>
+                    <div>
+                        <span style="color: var(--color-gray-500);">Speakers:</span>
+                        <strong id="statSpeakers" style="color: var(--color-green-400); margin-left: 4px;">0</strong>
+                    </div>
+                    <div>
+                        <span style="color: var(--color-gray-500);">Utterances:</span>
+                        <strong id="statUtterances" style="color: var(--color-orange-400); margin-left: 4px;">0</strong>
+                    </div>
+                    <div>
+                        <span style="color: var(--color-gray-500);">Words:</span>
+                        <strong id="statWords" style="color: var(--color-purple-400); margin-left: 4px;">0</strong>
+                    </div>
+                </div>
+            </div>
+
             <div class="control-group">
                 <button id="copyBtn" class="btn btn-secondary" disabled>📋 Copy text</button>
                 <button id="downloadBtn" class="btn btn-secondary" disabled>⬇️ Save as .txt</button>
