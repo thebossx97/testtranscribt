@@ -99,11 +99,13 @@ const state = {
     audioContexts: [], // Track for cleanup
     loadedModels: {}, // Cache for preloaded models
     allModelsLoaded: false,
-    // Live transcription state (VAD-based)
+    // Live transcription state (AudioWorklet VAD)
     isLiveTranscribing: false,
-    vad: null,                    // VAD instance
-    isSpeaking: false,            // Current speech state
-    speechStartTime: 0            // When current utterance started
+    shareStream: null,
+    audioContext: null,
+    audioWorkletNode: null,
+    isSpeaking: false,
+    speechStartTime: 0
 };
 
 // Helper to check if any operation is in progress
@@ -700,11 +702,20 @@ async function fileToFloat32(file) {
     }
 }
 
-// ==================== VAD-BASED LIVE TRANSCRIPTION ====================
+// ==================== AUDIOWORKLET VAD FOR SCREEN CAPTURE ====================
+
+// VAD Configuration
+const VAD_CONFIG = {
+    sampleRate: 16000,
+    energyThreshold: 0.01,        // RMS energy threshold for speech
+    silenceFramesNeeded: 25,      // ~0.8s of silence to end utterance
+    speechFramesNeeded: 5,        // ~0.15s of speech to start utterance
+    maxUtteranceSeconds: 15       // Maximum utterance length before force-split
+};
 
 // Remove duplicate sentences from transcript
 function removeDuplicateSentences(text) {
-    const sentences = text.match(/[^.!?\n]+[.!?\n]+/g) || [text];
+    const sentences = text.match(/[^.!?\n]+[.!?\n]*/g) || [text];
     const seen = new Set();
     const unique = [];
     
@@ -713,64 +724,141 @@ function removeDuplicateSentences(text) {
             .replace(/[.,!?;:]/g, '')
             .replace(/\s+/g, ' ');
         
-        if (!normalized || seen.has(normalized)) {
-            if (normalized) console.log(`🗑️ Removed duplicate: "${sentence.trim().substring(0, 50)}..."`);
-            continue;
+        if (normalized.length > 3 && !seen.has(normalized)) {
+            seen.add(normalized);
+            unique.push(sentence);
         }
-        seen.add(normalized);
-        unique.push(sentence);
     }
     
     return unique.join(' ').trim();
 }
 
-// Initialize Silero VAD for smart speech detection
-async function initializeVAD() {
-    console.log('🎙️ Initializing Voice Activity Detection...');
+// Create AudioWorklet processor as inline blob
+function createVADProcessorBlob() {
+    const processorCode = `
+    class VADProcessor extends AudioWorkletProcessor {
+        constructor(options) {
+            super();
+            this.energyThreshold = options.processorOptions.energyThreshold || 0.01;
+            this.silenceFramesNeeded = options.processorOptions.silenceFramesNeeded || 25;
+            this.speechFramesNeeded = options.processorOptions.speechFramesNeeded || 5;
+            
+            this.isSpeaking = false;
+            this.silenceFrames = 0;
+            this.speechFrames = 0;
+            this.speechBuffer = [];
+            this.speechStartTime = 0;
+            this.maxBufferSize = sampleRate * 15; // 15 seconds max
+        }
+        
+        calculateRMS(samples) {
+            let sum = 0;
+            for (let i = 0; i < samples.length; i++) {
+                sum += samples[i] * samples[i];
+            }
+            return Math.sqrt(sum / samples.length);
+        }
+        
+        process(inputs, outputs, parameters) {
+            const input = inputs[0];
+            if (!input || !input[0]) return true;
+            
+            const samples = input[0]; // Mono channel
+            const rms = this.calculateRMS(samples);
+            const hasSpeech = rms > this.energyThreshold;
+            
+            if (hasSpeech) {
+                this.speechFrames++;
+                this.silenceFrames = 0;
+                
+                // Start speaking if enough speech frames
+                if (!this.isSpeaking && this.speechFrames >= this.speechFramesNeeded) {
+                    this.isSpeaking = true;
+                    this.speechBuffer = [];
+                    this.speechStartTime = currentTime;
+                    this.port.postMessage({ type: 'speech_start' });
+                }
+                
+                // Buffer audio during speech
+                if (this.isSpeaking) {
+                    this.speechBuffer.push(new Float32Array(samples));
+                    
+                    // Force end if too long
+                    if (this.speechBuffer.length * 128 > this.maxBufferSize) {
+                        this.endUtterance();
+                    }
+                }
+                
+            } else {
+                this.silenceFrames++;
+                this.speechFrames = 0;
+                
+                // Continue buffering some silence for natural endings
+                if (this.isSpeaking && this.silenceFrames < this.silenceFramesNeeded) {
+                    this.speechBuffer.push(new Float32Array(samples));
+                }
+                
+                // End speaking if enough silence
+                if (this.isSpeaking && this.silenceFrames >= this.silenceFramesNeeded) {
+                    this.endUtterance();
+                }
+            }
+            
+            return true;
+        }
+        
+        endUtterance() {
+            // Combine all buffered chunks
+            const totalLength = this.speechBuffer.reduce((sum, chunk) => sum + chunk.length, 0);
+            const combined = new Float32Array(totalLength);
+            
+            let offset = 0;
+            for (const chunk of this.speechBuffer) {
+                combined.set(chunk, offset);
+                offset += chunk.length;
+            }
+            
+            // Send to main thread
+            this.port.postMessage({
+                type: 'speech_end',
+                audio: combined,
+                duration: (currentTime - this.speechStartTime).toFixed(2)
+            });
+            
+            // Reset
+            this.isSpeaking = false;
+            this.speechBuffer = [];
+            this.silenceFrames = 0;
+            this.speechFrames = 0;
+        }
+    }
     
-    try {
-        state.vad = await vad.MicVAD.new({
-            onSpeechStart: () => {
-                console.log('🗣️ Speech started');
-                state.isSpeaking = true;
-                state.speechStartTime = Date.now();
-                setStatus('🎤 Listening...', true);
-            },
-            
-            onSpeechEnd: async (audio) => {
-                const duration = ((Date.now() - state.speechStartTime) / 1000).toFixed(1);
-                console.log(`🔇 Speech ended (${duration}s), transcribing...`);
-                state.isSpeaking = false;
-                setStatus('⚙️ Transcribing...', true);
-                
-                // Transcribe this utterance
-                await transcribeUtterance(audio);
-                
-                setStatus('👂 Ready for next speech...', true);
-            },
-            
-            onVADMisfire: () => {
-                console.log('⚠️ False positive, ignoring...');
-            },
-            
-            // Configuration for balanced performance
-            positiveSpeechThreshold: 0.8,    // Higher = more confident
-            negativeSpeechThreshold: 0.5,    // Lower = quicker to detect silence  
-            minSpeechFrames: 3,               // Min frames to trigger speech
-            preSpeechPadFrames: 1,            // Padding before speech
-            redemptionFrames: 8,              // Frames of silence before ending
-            frameSamples: 1536,               // Audio frame size
-            baseAssetPath: 'https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.7/dist',
-            onnxWASMBasePath: 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist'
-        });
+    registerProcessor('vad-processor', VADProcessor);
+    `;
+    
+    const blob = new Blob([processorCode], { type: 'application/javascript' });
+    return URL.createObjectURL(blob);
+}
+
+// Handle VAD events from AudioWorklet
+async function handleVADEvent(event) {
+    const { type, audio, duration } = event.data;
+    
+    if (type === 'speech_start') {
+        console.log('🗣️ Speech started');
+        state.isSpeaking = true;
+        state.speechStartTime = Date.now();
+        setStatus('🎤 Speaking detected...', true);
         
-        console.log('✅ VAD initialized successfully');
-        return true;
+    } else if (type === 'speech_end') {
+        console.log(`🔇 Speech ended (${duration}s), transcribing...`);
+        state.isSpeaking = false;
+        setStatus('⚙️ Transcribing...', true);
         
-    } catch (error) {
-        console.error('❌ VAD initialization failed:', error);
-        showAlert('Failed to initialize voice detection: ' + error.message);
-        return false;
+        // Transcribe this utterance
+        await transcribeUtterance(audio);
+        
+        setStatus('👂 Listening...', true);
     }
 }
 
@@ -784,7 +872,8 @@ async function transcribeUtterance(audioFloat32) {
     try {
         state.isTranscribing = true;
         
-        console.log(`📊 Transcribing ${audioFloat32.length} samples (${(audioFloat32.length/16000).toFixed(1)}s)...`);
+        const duration = (audioFloat32.length / VAD_CONFIG.sampleRate).toFixed(1);
+        console.log(`📊 Transcribing ${audioFloat32.length} samples (${duration}s)...`);
         
         // Transcribe with Whisper
         const language = els.languageSelect ? els.languageSelect.value : null;
@@ -805,11 +894,11 @@ async function transcribeUtterance(audioFloat32) {
         if (newText.length > 0) {
             console.log(`✅ Transcribed: "${newText.substring(0, 100)}${newText.length > 100 ? '...' : ''}"`);
             
-            // Smart append: add space or punctuation
+            // Smart append
             if (state.currentTranscript.length > 0) {
                 const lastChar = state.currentTranscript.slice(-1);
                 const needsSpace = !['.', '!', '?', '\n'].includes(lastChar);
-                state.currentTranscript += (needsSpace ? ' ' : '\n') + newText;
+                state.currentTranscript += (needsSpace ? ' ' : ' ') + newText;
             } else {
                 state.currentTranscript = newText;
             }
@@ -826,6 +915,8 @@ async function transcribeUtterance(audioFloat32) {
                 els.copyBtn.disabled = false;
                 els.downloadBtn.disabled = false;
             }
+            
+            console.log(`Total transcript: ${state.currentTranscript.length} chars`);
         }
         
     } catch (error) {
@@ -957,7 +1048,7 @@ function getSupportedMimeType() {
 }
 
 async function startScreenShare() {
-    console.log('\n🎬 Starting VAD-based live transcription...');
+    console.log('\n🎬 Starting screen share with VAD processing...');
     
     try {
         if (isAnyOperationInProgress()) {
@@ -971,32 +1062,84 @@ async function startScreenShare() {
             return;
         }
         
-        // Initialize VAD if not already done
-        if (!state.vad) {
-            const success = await initializeVAD();
-            if (!success) return;
-        }
-        
         // Update UI
         els.startShareBtn.disabled = true;
         els.stopShareBtn.disabled = false;
         els.transcribeFileBtn.disabled = true;
         els.copyBtn.disabled = true;
         els.downloadBtn.disabled = true;
+        els.progressText.textContent = 'Waiting for you to select what to share…';
+        
+        // Request screen/tab capture with audio
+        const stream = await navigator.mediaDevices.getDisplayMedia({
+            video: true,  // Required for screen share dialog
+            audio: {
+                echoCancellation: false,
+                noiseSuppression: false,
+                autoGainControl: false
+            }
+        });
+        
+        // Check if audio track exists
+        const audioTrack = stream.getAudioTracks()[0];
+        if (!audioTrack) {
+            stream.getTracks().forEach(t => t.stop());
+            els.startShareBtn.disabled = false;
+            els.stopShareBtn.disabled = true;
+            els.progressText.textContent = '';
+            throw new Error('No audio track. Please check "Share audio" in the screen picker!');
+        }
+        
+        console.log('✅ Got audio track:', audioTrack.label);
+        state.shareStream = stream;
+        
+        // Create audio context
+        state.audioContext = new AudioContext({ sampleRate: VAD_CONFIG.sampleRate });
+        const source = state.audioContext.createMediaStreamSource(stream);
+        
+        // Load AudioWorklet processor
+        const processorURL = createVADProcessorBlob();
+        await state.audioContext.audioWorklet.addModule(processorURL);
+        
+        // Create worklet node
+        state.audioWorkletNode = new AudioWorkletNode(
+            state.audioContext, 
+            'vad-processor',
+            {
+                processorOptions: {
+                    energyThreshold: VAD_CONFIG.energyThreshold,
+                    silenceFramesNeeded: VAD_CONFIG.silenceFramesNeeded,
+                    speechFramesNeeded: VAD_CONFIG.speechFramesNeeded
+                }
+            }
+        );
+        
+        // Listen for VAD events
+        state.audioWorkletNode.port.onmessage = handleVADEvent;
+        
+        // Connect: source -> worklet -> (silent) destination
+        source.connect(state.audioWorkletNode);
+        state.audioWorkletNode.connect(state.audioContext.destination);
         
         // Clear transcript
-        els.transcript.innerHTML = '<em style="color: var(--color-gray-400);">🎙️ Voice detection active - speak naturally, transcription appears when you pause</em>';
+        els.transcript.innerHTML = '<em style="color: var(--color-gray-400);">🎙️ Listening for speech - transcription appears when you pause</em>';
         state.currentTranscript = '';
         state.isLiveTranscribing = true;
         
-        // Start VAD listening
-        state.vad.start();
+        // Handle stream ending (user stops sharing)
+        const videoTrack = stream.getVideoTracks()[0];
+        if (videoTrack) {
+            videoTrack.addEventListener('ended', () => {
+                console.log('Video track ended, stopping recording');
+                stopScreenShare();
+            });
+        }
         
-        setStatus('🎙️ Voice detection active', true);
-        els.progressText.textContent = 'Speak naturally - transcription starts when you pause';
-        showAlert('Voice detection active! Speak naturally and pause between sentences.');
+        setStatus('🎙️ Listening for speech...', true);
+        els.progressText.textContent = 'Screen audio capture active. Speak naturally!';
+        showAlert('Screen audio capture active! Speak naturally and pause between sentences.');
         
-        console.log('✅ VAD recording started');
+        console.log('✅ VAD processing started');
         
     } catch (error) {
         console.error('❌ Failed to start:', error);
@@ -1006,16 +1149,28 @@ async function startScreenShare() {
 }
 
 function cleanupScreenShare() {
-    console.log('\n🛑 Cleaning up VAD resources...');
+    console.log('\n🛑 Stopping screen share...');
     
-    // Stop VAD
-    if (state.vad) {
-        state.vad.pause();  // Pause but keep VAD loaded for reuse
+    // Stop audio context
+    if (state.audioWorkletNode) {
+        state.audioWorkletNode.disconnect();
+        state.audioWorkletNode = null;
+    }
+    
+    if (state.audioContext) {
+        state.audioContext.close().catch(err => console.warn('Failed to close AudioContext:', err));
+        state.audioContext = null;
+    }
+    
+    // Stop media tracks
+    if (state.shareStream) {
+        state.shareStream.getTracks().forEach(track => track.stop());
+        state.shareStream = null;
     }
     
     // Reset state
-    state.isLiveTranscribing = false;
     state.isSpeaking = false;
+    state.isLiveTranscribing = false;
     
     // Update UI
     els.startShareBtn.disabled = false;
@@ -1029,7 +1184,7 @@ function cleanupScreenShare() {
 }
 
 function stopScreenShare() {
-    console.log('\n🛑 Stopping VAD recording...');
+    console.log('\n🛑 Stopping recording...');
     
     cleanupScreenShare();
     setStatus('✓ Recording stopped', false);
