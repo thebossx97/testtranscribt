@@ -734,112 +734,6 @@ function removeDuplicateSentences(text) {
 }
 
 // Create AudioWorklet processor as inline blob
-function createVADProcessorBlob() {
-    const processorCode = `
-    class VADProcessor extends AudioWorkletProcessor {
-        constructor(options) {
-            super();
-            this.energyThreshold = options.processorOptions.energyThreshold || 0.01;
-            this.silenceFramesNeeded = options.processorOptions.silenceFramesNeeded || 25;
-            this.speechFramesNeeded = options.processorOptions.speechFramesNeeded || 5;
-            
-            this.isSpeaking = false;
-            this.silenceFrames = 0;
-            this.speechFrames = 0;
-            this.speechBuffer = [];
-            this.speechStartTime = 0;
-            this.maxBufferSize = sampleRate * 15; // 15 seconds max
-        }
-        
-        calculateRMS(samples) {
-            let sum = 0;
-            for (let i = 0; i < samples.length; i++) {
-                sum += samples[i] * samples[i];
-            }
-            return Math.sqrt(sum / samples.length);
-        }
-        
-        process(inputs, outputs, parameters) {
-            const input = inputs[0];
-            if (!input || !input[0]) return true;
-            
-            const samples = input[0]; // Mono channel
-            const rms = this.calculateRMS(samples);
-            const hasSpeech = rms > this.energyThreshold;
-            
-            if (hasSpeech) {
-                this.speechFrames++;
-                this.silenceFrames = 0;
-                
-                // Start speaking if enough speech frames
-                if (!this.isSpeaking && this.speechFrames >= this.speechFramesNeeded) {
-                    this.isSpeaking = true;
-                    this.speechBuffer = [];
-                    this.speechStartTime = currentTime;
-                    this.port.postMessage({ type: 'speech_start' });
-                }
-                
-                // Buffer audio during speech
-                if (this.isSpeaking) {
-                    this.speechBuffer.push(new Float32Array(samples));
-                    
-                    // Force end if too long
-                    if (this.speechBuffer.length * 128 > this.maxBufferSize) {
-                        this.endUtterance();
-                    }
-                }
-                
-            } else {
-                this.silenceFrames++;
-                this.speechFrames = 0;
-                
-                // Continue buffering some silence for natural endings
-                if (this.isSpeaking && this.silenceFrames < this.silenceFramesNeeded) {
-                    this.speechBuffer.push(new Float32Array(samples));
-                }
-                
-                // End speaking if enough silence
-                if (this.isSpeaking && this.silenceFrames >= this.silenceFramesNeeded) {
-                    this.endUtterance();
-                }
-            }
-            
-            return true;
-        }
-        
-        endUtterance() {
-            // Combine all buffered chunks
-            const totalLength = this.speechBuffer.reduce((sum, chunk) => sum + chunk.length, 0);
-            const combined = new Float32Array(totalLength);
-            
-            let offset = 0;
-            for (const chunk of this.speechBuffer) {
-                combined.set(chunk, offset);
-                offset += chunk.length;
-            }
-            
-            // Send to main thread
-            this.port.postMessage({
-                type: 'speech_end',
-                audio: combined,
-                duration: (currentTime - this.speechStartTime).toFixed(2)
-            });
-            
-            // Reset
-            this.isSpeaking = false;
-            this.speechBuffer = [];
-            this.silenceFrames = 0;
-            this.speechFrames = 0;
-        }
-    }
-    
-    registerProcessor('vad-processor', VADProcessor);
-    `;
-    
-    const blob = new Blob([processorCode], { type: 'application/javascript' });
-    return URL.createObjectURL(blob);
-}
-
 // Handle VAD events from AudioWorklet
 async function handleVADEvent(event) {
     const { type, audio, duration } = event.data;
@@ -1097,9 +991,8 @@ async function startScreenShare() {
         state.audioContext = new AudioContext({ sampleRate: VAD_CONFIG.sampleRate });
         const source = state.audioContext.createMediaStreamSource(stream);
         
-        // Load AudioWorklet processor
-        const processorURL = createVADProcessorBlob();
-        await state.audioContext.audioWorklet.addModule(processorURL);
+        // Load AudioWorklet processor from static file
+        await state.audioContext.audioWorklet.addModule('js/vad-processor.js');
         
         // Create worklet node
         state.audioWorkletNode = new AudioWorkletNode(
