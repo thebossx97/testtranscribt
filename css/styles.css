@@ -523,3 +523,289 @@ body.loading .container {
     border-color: #ef4444;
     color: #ef4444;
 }
+
+/* ============================================================================
+   PHASE 3: AI INTELLIGENCE TAB STYLES
+   ============================================================================ */
+
+/* Tab Navigation */
+.tab-nav {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+    border-bottom: 2px solid rgba(0, 0, 0, 0.1);
+    padding-bottom: 0;
+}
+
+.tab-btn {
+    background: none;
+    border: none;
+    padding: 12px 20px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--color-gray-400);
+    cursor: pointer;
+    border-bottom: 3px solid transparent;
+    transition: all 0.2s ease;
+    position: relative;
+    bottom: -2px;
+}
+
+.tab-btn:hover {
+    color: var(--color-teal-500);
+    background: rgba(33, 128, 141, 0.05);
+}
+
+.tab-btn.active {
+    color: var(--color-teal-500);
+    border-bottom-color: var(--color-teal-500);
+    font-weight: 600;
+}
+
+/* Tab Content */
+.tab-content {
+    display: none;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+/* AI Model Status */
+.ai-model-status {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    background: rgba(59, 130, 246, 0.1);
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    border-radius: 8px;
+    margin-bottom: 16px;
+}
+
+.ai-model-status .status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--color-gray-300);
+}
+
+.ai-model-status .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--color-gray-400);
+}
+
+.ai-model-status.loaded .status-dot {
+    background: var(--color-green-500);
+    animation: pulse 2s ease-in-out infinite;
+}
+
+/* Progress Bar */
+.progress-bar-container {
+    width: 100%;
+    height: 12px;
+    background: rgba(0, 0, 0, 0.1);
+    border-radius: 6px;
+    overflow: hidden;
+    margin-bottom: 8px;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--color-teal-500), var(--color-teal-600));
+    width: 0%;
+    transition: width 0.3s ease;
+}
+
+.progress-text {
+    font-size: 12px;
+    color: var(--color-gray-400);
+    text-align: center;
+}
+
+/* Intelligence Sections */
+.intelligence-section {
+    margin-bottom: 24px;
+    padding: 16px;
+    background: rgba(255, 255, 255, 0.5);
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    border-radius: 8px;
+}
+
+.intelligence-section h3 {
+    margin: 0 0 12px 0;
+    font-size: 16px;
+    color: var(--color-teal-500);
+    font-weight: 600;
+}
+
+/* Summary Content */
+.summary-content {
+    font-size: 14px;
+    line-height: 1.6;
+}
+
+.summary-executive {
+    margin-bottom: 16px;
+}
+
+.summary-executive strong {
+    display: block;
+    margin-bottom: 8px;
+    color: var(--color-slate-900);
+}
+
+.summary-executive p {
+    margin: 0;
+    color: var(--color-gray-400);
+}
+
+/* Action Items */
+.action-items-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.action-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px;
+    background: rgba(255, 255, 255, 0.8);
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    border-radius: 6px;
+    transition: all 0.2s ease;
+}
+
+.action-item:hover {
+    border-color: var(--color-teal-500);
+    box-shadow: 0 2px 8px rgba(33, 128, 141, 0.1);
+}
+
+.action-item-checkbox {
+    margin-top: 2px;
+    cursor: pointer;
+}
+
+.action-item-content {
+    flex: 1;
+}
+
+.action-item-text {
+    font-size: 14px;
+    color: var(--color-slate-900);
+    margin-bottom: 6px;
+}
+
+.action-item-meta {
+    display: flex;
+    gap: 12px;
+    font-size: 12px;
+    color: var(--color-gray-400);
+}
+
+.action-item-meta span {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.priority-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.priority-urgent {
+    background: rgba(239, 68, 68, 0.2);
+    color: #ef4444;
+}
+
+.priority-high {
+    background: rgba(245, 158, 11, 0.2);
+    color: #f59e0b;
+}
+
+.priority-normal {
+    background: rgba(34, 197, 94, 0.2);
+    color: #22c55e;
+}
+
+/* Decisions List */
+.decisions-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.decision-item {
+    padding: 12px;
+    background: rgba(255, 255, 255, 0.8);
+    border-left: 4px solid var(--color-teal-500);
+    border-radius: 4px;
+}
+
+.decision-text {
+    font-size: 14px;
+    color: var(--color-slate-900);
+    margin-bottom: 6px;
+}
+
+.decision-meta {
+    font-size: 12px;
+    color: var(--color-gray-400);
+}
+
+/* Topics List */
+.topics-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.topic-tag {
+    display: inline-block;
+    padding: 6px 12px;
+    background: rgba(33, 128, 141, 0.1);
+    border: 1px solid rgba(33, 128, 141, 0.3);
+    border-radius: 16px;
+    font-size: 13px;
+    color: var(--color-teal-600);
+    font-weight: 500;
+}
+
+/* Empty States */
+.empty-state {
+    text-align: center;
+    padding: 16px;
+    color: var(--color-gray-400);
+    font-size: 13px;
+}
+
+.empty-state-large {
+    text-align: center;
+    padding: 48px 24px;
+    color: var(--color-gray-400);
+}
+
+.empty-state-large p {
+    margin: 8px 0;
+}
+
+.empty-state-large .hint {
+    font-size: 13px;
+    color: var(--color-gray-300);
+}
+
+/* Button Sizes */
+.btn-sm {
+    padding: 6px 12px;
+    font-size: 13px;
+}

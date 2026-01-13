@@ -61,9 +61,18 @@
 
     <div class="layout">
         <div class="panel">
-            <h2>Transcript</h2>
+            <!-- Tab Navigation -->
+            <div class="tab-nav">
+                <button class="tab-btn active" data-tab="transcript">📝 Transcript</button>
+                <button class="tab-btn" data-tab="intelligence" id="intelligenceTab">🧠 Intelligence</button>
+                <button class="tab-btn" data-tab="history">📋 History</button>
+            </div>
 
             <div id="alert" class="alert"></div>
+
+            <!-- Transcript Tab -->
+            <div class="tab-content active" data-tab="transcript">
+            <h2 style="margin-top: 0;">Transcript</h2>
 
             <div class="control-group">
                 <div class="model-selector">
@@ -152,6 +161,85 @@
             <div class="footer-note">
                 First run will download all 3 multilingual models (~710MB total, cached in browser). This takes 5-10 minutes but only happens once. Subsequent visits load instantly. Supports 99 languages!
             </div>
+            </div>
+            <!-- End Transcript Tab -->
+
+            <!-- Intelligence Tab -->
+            <div class="tab-content" data-tab="intelligence">
+                <h2 style="margin-top: 0;">🧠 Meeting Intelligence</h2>
+                
+                <!-- AI Model Status -->
+                <div id="aiModelStatus" class="ai-model-status">
+                    <div class="status-indicator">
+                        <span class="status-dot"></span>
+                        <span id="aiStatusText">AI models not loaded</span>
+                    </div>
+                    <button id="loadAIModelsBtn" class="btn btn-primary btn-sm">Load AI Models</button>
+                </div>
+
+                <!-- AI Loading Progress -->
+                <div id="aiLoadingProgress" style="display: none; margin-bottom: 16px;">
+                    <div class="progress-bar-container">
+                        <div id="aiProgressFill" class="progress-fill"></div>
+                    </div>
+                    <div id="aiProgressText" class="progress-text">Loading AI models...</div>
+                </div>
+
+                <!-- Intelligence Content (shown after processing) -->
+                <div id="intelligenceContent" style="display: none;">
+                    <!-- Summary Section -->
+                    <div class="intelligence-section">
+                        <h3>📄 Summary</h3>
+                        <div id="summaryContent" class="summary-content">
+                            <div class="summary-executive">
+                                <strong>Executive Summary:</strong>
+                                <p id="summaryExecutive">No summary available yet.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Action Items Section -->
+                    <div class="intelligence-section">
+                        <h3>✅ Action Items</h3>
+                        <div id="actionItemsList" class="action-items-list">
+                            <p class="empty-state">No action items detected yet.</p>
+                        </div>
+                    </div>
+
+                    <!-- Decisions Section -->
+                    <div class="intelligence-section">
+                        <h3>🎯 Key Decisions</h3>
+                        <div id="decisionsList" class="decisions-list">
+                            <p class="empty-state">No decisions detected yet.</p>
+                        </div>
+                    </div>
+
+                    <!-- Topics Section -->
+                    <div class="intelligence-section">
+                        <h3>💡 Main Topics</h3>
+                        <div id="topicsList" class="topics-list">
+                            <p class="empty-state">No topics detected yet.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Empty State -->
+                <div id="intelligenceEmptyState" class="empty-state-large">
+                    <p>🎙️ Start a meeting or load a transcript to generate intelligence insights.</p>
+                    <p class="hint">AI will automatically extract summaries, action items, decisions, and key topics.</p>
+                </div>
+            </div>
+            <!-- End Intelligence Tab -->
+
+            <!-- History Tab -->
+            <div class="tab-content" data-tab="history">
+                <h2 style="margin-top: 0;">📋 Meeting History</h2>
+                <div id="meetingsHistoryContent">
+                    <!-- Will be populated by refreshMeetingsHistory() -->
+                </div>
+            </div>
+            <!-- End History Tab -->
+
         </div>
 
         <div class="panel">

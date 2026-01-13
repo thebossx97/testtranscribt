@@ -115,7 +115,34 @@ const state = {
     ],
     // Meeting management
     currentMeeting: null,
-    meetingDB: null
+    meetingDB: null,
+    // AI Intelligence models (Phase 3)
+    aiModels: {
+        summarizer: null,           // DistilBART for summarization
+        classifier: null,           // BERT for classification (optional)
+        isLoading: false,
+        modelsLoaded: false,
+        loadProgress: 0
+    },
+    // Meeting Intelligence data (Phase 3)
+    meetingIntelligence: {
+        summary: {
+            executive: '',          // 1-2 sentences
+            standard: '',           // 1 paragraph
+            detailed: []            // Bullet points
+        },
+        actionItems: [],            // Extracted action items
+        decisions: [],              // Key decisions made
+        topics: [],                 // Main topics discussed
+        questions: [],              // Questions asked (answered/unanswered)
+        keyPoints: [],              // Important points
+        sentiment: {                // Overall sentiment
+            positive: 0,
+            neutral: 0,
+            negative: 0
+        },
+        lastProcessedUtterance: 0   // Track processing state
+    }
 };
 
 // Helper to check if any operation is in progress
@@ -154,6 +181,20 @@ const els = {
     modelTiny: document.getElementById('modelTiny'),
     modelBase: document.getElementById('modelBase'),
     modelSmall: document.getElementById('modelSmall'),
+    // Phase 3: Intelligence tab elements
+    intelligenceTab: document.getElementById('intelligenceTab'),
+    aiModelStatus: document.getElementById('aiModelStatus'),
+    aiStatusText: document.getElementById('aiStatusText'),
+    loadAIModelsBtn: document.getElementById('loadAIModelsBtn'),
+    aiLoadingProgress: document.getElementById('aiLoadingProgress'),
+    aiProgressFill: document.getElementById('aiProgressFill'),
+    aiProgressText: document.getElementById('aiProgressText'),
+    intelligenceContent: document.getElementById('intelligenceContent'),
+    intelligenceEmptyState: document.getElementById('intelligenceEmptyState'),
+    summaryExecutive: document.getElementById('summaryExecutive'),
+    actionItemsList: document.getElementById('actionItemsList'),
+    decisionsList: document.getElementById('decisionsList'),
+    topicsList: document.getElementById('topicsList')
 };
 
 // Utility functions
@@ -1436,6 +1477,34 @@ function initializeApp() {
     els.historyBtn.addEventListener('click', toggleMeetingsHistory);
     els.closeSidebarBtn.addEventListener('click', toggleMeetingsHistory);
     
+    // Phase 3: Tab navigation
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const tabName = btn.dataset.tab;
+            switchTab(tabName);
+        });
+    });
+    
+    // Phase 3: Load AI models button
+    if (els.loadAIModelsBtn) {
+        els.loadAIModelsBtn.addEventListener('click', async () => {
+            els.loadAIModelsBtn.disabled = true;
+            els.aiLoadingProgress.style.display = 'block';
+            
+            const success = await loadIntelligenceModels();
+            
+            els.aiLoadingProgress.style.display = 'none';
+            
+            if (success) {
+                els.aiModelStatus.classList.add('loaded');
+                els.aiStatusText.textContent = 'AI models loaded and ready';
+                els.loadAIModelsBtn.style.display = 'none';
+            } else {
+                els.loadAIModelsBtn.disabled = false;
+            }
+        });
+    }
+    
     // Manual model load button
     if (els.loadModelBtn) {
         els.loadModelBtn.addEventListener('click', () => {
@@ -1526,7 +1595,7 @@ function initializeApp() {
 // Initialize IndexedDB
 async function initMeetingDB() {
     return new Promise((resolve, reject) => {
-        const request = indexedDB.open('TranscriptMeetings', 1);
+        const request = indexedDB.open('TranscriptMeetings', 2); // Increment version for new store
         
         request.onerror = () => {
             console.error('Failed to open IndexedDB:', request.error);
@@ -1542,11 +1611,19 @@ async function initMeetingDB() {
         request.onupgradeneeded = (event) => {
             const db = event.target.result;
             
+            // Meetings store
             if (!db.objectStoreNames.contains('meetings')) {
                 const store = db.createObjectStore('meetings', { keyPath: 'id' });
                 store.createIndex('startTime', 'startTime', { unique: false });
                 store.createIndex('title', 'title', { unique: false });
                 console.log('📦 Created meetings object store');
+            }
+            
+            // AI models cache store (Phase 3)
+            if (!db.objectStoreNames.contains('aiModels')) {
+                const modelStore = db.createObjectStore('aiModels', { keyPath: 'modelId' });
+                modelStore.createIndex('cachedAt', 'cachedAt', { unique: false });
+                console.log('📦 Created aiModels cache store');
             }
         };
     });
@@ -1781,6 +1858,260 @@ async function deleteMeeting(id) {
         console.error('Failed to delete meeting:', error);
         showAlert(`Failed to delete meeting: ${error.message}`);
     }
+}
+
+// ============================================================================
+// PHASE 3: AI MEETING INTELLIGENCE
+// ============================================================================
+
+/**
+ * Load AI models for meeting intelligence (lazy loading)
+ * Models are loaded on-demand when user requests intelligence features
+ * Progress is tracked and displayed to user
+ */
+async function loadIntelligenceModels() {
+    // Already loaded
+    if (state.aiModels.modelsLoaded) {
+        console.log('✓ AI models already loaded');
+        return true;
+    }
+    
+    // Already loading
+    if (state.aiModels.isLoading) {
+        console.log('⏳ AI models already loading...');
+        return false;
+    }
+    
+    state.aiModels.isLoading = true;
+    state.aiModels.loadProgress = 0;
+    
+    try {
+        console.log('=== Loading AI Intelligence Models ===');
+        
+        // Check if transformers.js is available
+        if (!pipeline || !env) {
+            throw new Error('Transformers.js not initialized');
+        }
+        
+        // Update UI - show loading state
+        showAlert('Loading AI models for intelligence features...', 'warning');
+        
+        // Check if model is already cached
+        const modelId = 'Xenova/distilbart-cnn-6-6';
+        const isCached = await isAIModelCached(modelId);
+        
+        if (isCached) {
+            console.log('✓ Model found in cache, loading will be faster');
+        } else {
+            console.log('⏳ First-time model download (268MB), this will take a few minutes...');
+        }
+        
+        // Load DistilBART for summarization (268MB)
+        console.log('Loading DistilBART summarization model...');
+        state.aiModels.loadProgress = 10;
+        
+        state.aiModels.summarizer = await pipeline(
+            'summarization',
+            modelId,
+            {
+                quantized: true,
+                progress_callback: (progress) => {
+                    if (progress.status === 'progress' && progress.progress !== undefined) {
+                        // Map progress to 10-90% range
+                        state.aiModels.loadProgress = 10 + Math.round(progress.progress * 0.8);
+                        console.log(`Model loading: ${state.aiModels.loadProgress}%`);
+                    }
+                }
+            }
+        );
+        
+        console.log('✓ DistilBART model loaded');
+        state.aiModels.loadProgress = 100;
+        
+        // Cache metadata for future reference
+        await cacheAIModelMetadata(modelId, 'summarization');
+        
+        // Mark as loaded
+        state.aiModels.modelsLoaded = true;
+        state.aiModels.isLoading = false;
+        
+        showAlert('✓ AI models loaded successfully', 'success');
+        console.log('=== AI Intelligence Models Ready ===');
+        
+        return true;
+        
+    } catch (error) {
+        console.error('Failed to load AI models:', error);
+        state.aiModels.isLoading = false;
+        state.aiModels.loadProgress = 0;
+        
+        showAlert(`Failed to load AI models: ${error.message}. Using rule-based fallback.`, 'warning');
+        
+        // Return false but don't throw - we'll use rule-based fallback
+        return false;
+    }
+}
+
+/**
+ * Check if AI models are available
+ * Returns true if models loaded, false if using rule-based fallback
+ */
+function areAIModelsAvailable() {
+    return state.aiModels.modelsLoaded && state.aiModels.summarizer !== null;
+}
+
+/**
+ * Switch between tabs (Transcript, Intelligence, History)
+ */
+function switchTab(tabName) {
+    // Update tab buttons
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        if (btn.dataset.tab === tabName) {
+            btn.classList.add('active');
+        } else {
+            btn.classList.remove('active');
+        }
+    });
+    
+    // Update tab content
+    document.querySelectorAll('.tab-content').forEach(content => {
+        if (content.dataset.tab === tabName) {
+            content.classList.add('active');
+        } else {
+            content.classList.remove('active');
+        }
+    });
+    
+    // If switching to intelligence tab, check if we should show content
+    if (tabName === 'intelligence') {
+        updateIntelligenceDisplay();
+    }
+    
+    // If switching to history tab, refresh the list
+    if (tabName === 'history') {
+        refreshMeetingsHistory();
+    }
+}
+
+/**
+ * Update intelligence display based on current state
+ */
+function updateIntelligenceDisplay() {
+    const hasData = state.utterances.length > 0;
+    
+    if (hasData) {
+        els.intelligenceEmptyState.style.display = 'none';
+        els.intelligenceContent.style.display = 'block';
+    } else {
+        els.intelligenceEmptyState.style.display = 'block';
+        els.intelligenceContent.style.display = 'none';
+    }
+}
+
+/**
+ * Generate summary using rule-based fallback (when AI model unavailable)
+ * Extracts key sentences based on importance scoring
+ */
+function generateRuleBasedSummary(text, maxSentences = 3) {
+    if (!text || text.trim().length === 0) {
+        return '';
+    }
+    
+    // Split into sentences
+    const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
+    
+    if (sentences.length <= maxSentences) {
+        return text;
+    }
+    
+    // Score sentences based on:
+    // - Position (first/last sentences often important)
+    // - Length (very short sentences less important)
+    // - Keywords (action words, decision words)
+    const keywords = [
+        'decided', 'agreed', 'action', 'next', 'important', 'critical',
+        'must', 'should', 'will', 'need', 'discussed', 'concluded'
+    ];
+    
+    const scoredSentences = sentences.map((sentence, index) => {
+        let score = 0;
+        
+        // Position bonus
+        if (index === 0) score += 2; // First sentence
+        if (index === sentences.length - 1) score += 1; // Last sentence
+        
+        // Length penalty for very short sentences
+        const words = sentence.trim().split(/\s+/).length;
+        if (words < 5) score -= 1;
+        if (words > 10) score += 1;
+        
+        // Keyword bonus
+        const lowerSentence = sentence.toLowerCase();
+        keywords.forEach(keyword => {
+            if (lowerSentence.includes(keyword)) score += 1;
+        });
+        
+        return { sentence: sentence.trim(), score, index };
+    });
+    
+    // Sort by score and take top sentences
+    const topSentences = scoredSentences
+        .sort((a, b) => b.score - a.score)
+        .slice(0, maxSentences)
+        .sort((a, b) => a.index - b.index); // Restore original order
+    
+    return topSentences.map(s => s.sentence).join(' ');
+}
+
+/**
+ * Cache AI model to IndexedDB for faster subsequent loads
+ * Note: Transformers.js handles its own caching, but we track metadata
+ */
+async function cacheAIModelMetadata(modelId, modelType) {
+    if (!state.meetingDB) await initMeetingDB();
+    
+    return new Promise((resolve, reject) => {
+        const transaction = state.meetingDB.transaction(['aiModels'], 'readwrite');
+        const store = transaction.objectStore('aiModels');
+        
+        const metadata = {
+            modelId: modelId,
+            modelType: modelType,
+            cachedAt: Date.now(),
+            version: '1.0'
+        };
+        
+        const request = store.put(metadata);
+        
+        request.onsuccess = () => {
+            console.log(`✓ Cached metadata for ${modelId}`);
+            resolve();
+        };
+        request.onerror = () => {
+            console.warn('Failed to cache model metadata:', request.error);
+            resolve(); // Don't fail if caching fails
+        };
+    });
+}
+
+/**
+ * Check if AI model is cached
+ */
+async function isAIModelCached(modelId) {
+    if (!state.meetingDB) await initMeetingDB();
+    
+    return new Promise((resolve) => {
+        const transaction = state.meetingDB.transaction(['aiModels'], 'readonly');
+        const store = transaction.objectStore('aiModels');
+        const request = store.get(modelId);
+        
+        request.onsuccess = () => {
+            resolve(!!request.result);
+        };
+        request.onerror = () => {
+            resolve(false);
+        };
+    });
 }
 
 // Start the app when DOM is ready
