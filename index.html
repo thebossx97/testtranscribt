@@ -142,6 +142,7 @@
                 <button id="copyBtn" class="btn btn-secondary" disabled>📋 Copy text</button>
                 <button id="downloadBtn" class="btn btn-secondary" disabled>⬇️ Save as .txt</button>
                 <button id="saveMeetingBtn" class="btn btn-secondary" disabled>💾 Save Meeting</button>
+                <button id="historyBtn" class="btn btn-secondary">📋 History</button>
             </div>
 
             <div id="progressText" class="hint"></div>
@@ -204,5 +205,17 @@
     appScript.src = 'js/app.js';
     document.body.appendChild(appScript);
 </script>
+
+<!-- Meeting History Sidebar -->
+<div id="meetingsSidebar" class="meetings-sidebar">
+    <div class="sidebar-header">
+        <h3 style="margin: 0; font-size: 1.1rem;">Meeting History</h3>
+        <button id="closeSidebarBtn" class="btn-close">✕</button>
+    </div>
+    <div id="meetingsList" class="meetings-list">
+        <div style="color: #666; font-size: 0.85rem; padding: 1rem;">Loading meetings...</div>
+    </div>
+</div>
+
 </body>
 </html>

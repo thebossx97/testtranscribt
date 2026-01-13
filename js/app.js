@@ -140,6 +140,8 @@ const els = {
     copyBtn: document.getElementById('copyBtn'),
     downloadBtn: document.getElementById('downloadBtn'),
     saveMeetingBtn: document.getElementById('saveMeetingBtn'),
+    historyBtn: document.getElementById('historyBtn'),
+    closeSidebarBtn: document.getElementById('closeSidebarBtn'),
     progressText: document.getElementById('progressText'),
     progressBar: document.getElementById('progressBar'),
     progressFill: document.getElementById('progressFill'),
@@ -1431,6 +1433,8 @@ function initializeApp() {
     els.copyBtn.addEventListener('click', handleCopy);
     els.downloadBtn.addEventListener('click', handleDownload);
     els.saveMeetingBtn.addEventListener('click', saveCurrentMeeting);
+    els.historyBtn.addEventListener('click', toggleMeetingsHistory);
+    els.closeSidebarBtn.addEventListener('click', toggleMeetingsHistory);
     
     // Manual model load button
     if (els.loadModelBtn) {
@@ -1655,6 +1659,127 @@ async function saveCurrentMeeting() {
         showAlert(`💾 Meeting saved: "${state.currentMeeting.title}"`);
     } catch (error) {
         showAlert(`Failed to save meeting: ${error.message}`);
+    }
+}
+
+// Toggle meeting history sidebar
+function toggleMeetingsHistory() {
+    const sidebar = document.getElementById('meetingsSidebar');
+    const isOpen = sidebar.classList.contains('open');
+    
+    if (isOpen) {
+        sidebar.classList.remove('open');
+    } else {
+        sidebar.classList.add('open');
+        refreshMeetingsHistory();
+    }
+}
+
+// Refresh meeting history list
+async function refreshMeetingsHistory() {
+    const list = document.getElementById('meetingsList');
+    
+    try {
+        const meetings = await loadMeetingsFromDB();
+        
+        if (meetings.length === 0) {
+            list.innerHTML = '<div style="color: #666; font-size: 0.85rem; padding: 1rem;">No saved meetings</div>';
+            return;
+        }
+        
+        list.innerHTML = meetings.map(meeting => {
+            const date = new Date(meeting.startTime).toLocaleString();
+            const duration = meeting.endTime ? 
+                formatDuration(meeting.endTime - meeting.startTime) : 
+                'In progress';
+            const speakers = meeting.speakers?.length || 0;
+            const utterances = meeting.utterances?.length || 0;
+            
+            return `
+                <div class="meeting-card" onclick="loadMeeting('${meeting.id}')">
+                    <div class="meeting-card-title">${meeting.title}</div>
+                    <div class="meeting-card-meta">
+                        <div>${date}</div>
+                        <div style="margin-top: 0.25rem;">
+                            <span>⏱️ ${duration}</span>
+                            <span>👥 ${speakers}</span>
+                            <span>💬 ${utterances}</span>
+                        </div>
+                    </div>
+                    <div class="meeting-card-actions">
+                        <button class="btn-card" onclick="event.stopPropagation(); loadMeeting('${meeting.id}')">
+                            📂 Load
+                        </button>
+                        <button class="btn-card danger" onclick="event.stopPropagation(); deleteMeeting('${meeting.id}')">
+                            🗑️ Delete
+                        </button>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    } catch (error) {
+        console.error('Failed to load meetings:', error);
+        list.innerHTML = '<div style="color: #ef4444; font-size: 0.85rem; padding: 1rem;">Failed to load meetings</div>';
+    }
+}
+
+// Format duration in MM:SS
+function formatDuration(ms) {
+    const seconds = Math.floor(ms / 1000);
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+// Load a saved meeting
+async function loadMeeting(id) {
+    try {
+        const meetings = await loadMeetingsFromDB();
+        const meeting = meetings.find(m => m.id === id);
+        
+        if (!meeting) {
+            showAlert('Meeting not found');
+            return;
+        }
+        
+        // Confirm if current meeting has unsaved changes
+        if (state.utterances.length > 0 && state.currentMeeting.id !== id) {
+            if (!confirm('Load this meeting? Current unsaved changes will be lost.')) {
+                return;
+            }
+        }
+        
+        // Load meeting data
+        state.currentMeeting = meeting;
+        state.utterances = meeting.utterances || [];
+        state.speakers = meeting.speakers || [];
+        
+        // Update display
+        updateDiarizedTranscript();
+        
+        // Close sidebar
+        toggleMeetingsHistory();
+        
+        showAlert(`📂 Loaded: "${meeting.title}"`);
+    } catch (error) {
+        console.error('Failed to load meeting:', error);
+        showAlert(`Failed to load meeting: ${error.message}`);
+    }
+}
+
+// Delete a meeting
+async function deleteMeeting(id) {
+    if (!confirm('Delete this meeting permanently?')) {
+        return;
+    }
+    
+    try {
+        await deleteMeetingFromDB(id);
+        showAlert('🗑️ Meeting deleted');
+        refreshMeetingsHistory();
+    } catch (error) {
+        console.error('Failed to delete meeting:', error);
+        showAlert(`Failed to delete meeting: ${error.message}`);
     }
 }
 
