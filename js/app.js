@@ -221,7 +221,8 @@ const els = {
     exportMarkdownBtn: document.getElementById('exportMarkdownBtn'),
     exportJsonBtn: document.getElementById('exportJsonBtn'),
     exportTextBtn: document.getElementById('exportTextBtn'),
-    lowMemoryMode: document.getElementById('lowMemoryMode')
+    lowMemoryMode: document.getElementById('lowMemoryMode'),
+    toggleLiveMode: document.getElementById('toggleLiveMode')
 };
 
 // Utility functions
@@ -1365,8 +1366,16 @@ async function startScreenShare() {
             }
         );
         
-        // Listen for VAD events
-        state.audioWorkletNode.port.onmessage = handleVADEvent;
+        // Listen for VAD events and live mode snapshots
+        state.audioWorkletNode.port.onmessage = (event) => {
+            if (event.data.type === 'snapshot_ready') {
+                // Handle live mode snapshot
+                handleSnapshotReady(event.data.audio, event.data.timestamp);
+            } else {
+                // Handle standard VAD events
+                handleVADEvent(event);
+            }
+        };
         
         // Connect: source -> worklet -> (silent) destination
         source.connect(state.audioWorkletNode);
@@ -1646,6 +1655,13 @@ function initializeApp() {
                 console.log('💾 Low Memory Mode DISABLED');
                 showAlert('Low Memory Mode disabled - full features available', 'success');
             }
+        });
+    }
+    
+    // Live transcription mode toggle
+    if (els.toggleLiveMode) {
+        els.toggleLiveMode.addEventListener('change', (e) => {
+            enableLiveTranscription(e.target.checked);
         });
     }
     
@@ -2574,6 +2590,324 @@ function formatDuration(seconds) {
         return `${minutes}m ${secs}s`;
     } else {
         return `${secs}s`;
+    }
+}
+
+// ============================================================================
+// LIVE TRANSCRIPTION MODE
+// ============================================================================
+
+/**
+ * Enable or disable live transcription mode
+ */
+async function enableLiveTranscription(enable) {
+    state.liveTranscription.enabled = enable;
+    
+    if (enable) {
+        console.log('🔴 Starting live transcription mode...');
+        
+        // Tell VAD to start buffering
+        if (state.audioWorkletNode) {
+            state.audioWorkletNode.port.postMessage({
+                type: 'enable_live_mode',
+                enabled: true
+            });
+        }
+        
+        // Start snapshot loop
+        state.liveTranscription.intervalId = setInterval(
+            requestSnapshot,
+            LIVE_CONFIG.updateInterval * 1000
+        );
+        
+        // Initialize live display
+        createLiveTranscriptDisplay();
+        
+        showAlert('🔴 Live transcription active', 'success');
+        
+    } else {
+        console.log('⏸️ Stopping live transcription mode...');
+        
+        // Stop loop
+        if (state.liveTranscription.intervalId) {
+            clearInterval(state.liveTranscription.intervalId);
+            state.liveTranscription.intervalId = null;
+        }
+        
+        // Tell VAD to stop buffering
+        if (state.audioWorkletNode) {
+            state.audioWorkletNode.port.postMessage({
+                type: 'enable_live_mode',
+                enabled: false
+            });
+        }
+        
+        // Clean up
+        state.liveTranscription.lastDisplayedText = '';
+        state.liveTranscription.pendingSnapshots = [];
+        
+        removeLiveTranscriptDisplay();
+        
+        showAlert('Live transcription stopped', 'success');
+    }
+}
+
+/**
+ * Request snapshot from VAD processor
+ */
+function requestSnapshot() {
+    // Skip if already processing
+    if (state.liveTranscription.isProcessing) {
+        console.log('⏭️ Skipping snapshot, still processing');
+        return;
+    }
+    
+    // Request snapshot from VAD
+    if (state.audioWorkletNode) {
+        state.audioWorkletNode.port.postMessage({
+            type: 'get_snapshot',
+            duration: LIVE_CONFIG.snapshotDuration
+        });
+    }
+}
+
+/**
+ * Handle snapshot ready from VAD
+ */
+async function handleSnapshotReady(audio, timestamp) {
+    // Quality check
+    const rms = calculateRMS(audio);
+    if (rms < LIVE_CONFIG.minRMS) {
+        console.log('⏭️ Snapshot too quiet, skipping');
+        updateLiveDisplay(''); // Clear if silence
+        return;
+    }
+    
+    // Process snapshot
+    state.liveTranscription.isProcessing = true;
+    
+    try {
+        await processLiveSnapshot(audio, timestamp);
+    } finally {
+        state.liveTranscription.isProcessing = false;
+    }
+}
+
+/**
+ * Process live snapshot with optimized settings
+ */
+async function processLiveSnapshot(audioFloat32, timestamp) {
+    try {
+        // Use Tiny model for speed
+        const tinyModel = state.loadedModels['Xenova/whisper-tiny'];
+        if (!tinyModel) {
+            console.warn('Tiny model not loaded for live mode');
+            return;
+        }
+        
+        // FAST transcription settings
+        const language = els.languageSelect ? els.languageSelect.value : null;
+        const options = {
+            task: 'transcribe',
+            
+            // Speed optimizations
+            condition_on_previous_text: false,
+            return_timestamps: false,
+            num_beams: 1,              // Greedy = fastest
+            temperature: 0,
+            
+            // Quality safeguards
+            compression_ratio_threshold: 2.8,
+            no_speech_threshold: 0.7
+        };
+        
+        if (language) {
+            options.language = language;
+        }
+        
+        const output = await tinyModel(audioFloat32, options);
+        
+        const text = output.text?.trim() || '';
+        
+        // Quick validation
+        if (!text || text.length === 0) return;
+        if (isExtremeRepetition(text)) {
+            console.log('🚫 Blocked repetitive live snapshot');
+            return;
+        }
+        
+        // Smart merge with previous
+        const merged = mergeLiveSnapshots(state.liveTranscription.lastDisplayedText, text);
+        
+        // Update display
+        updateLiveDisplay(merged);
+        
+        // Store for next merge
+        state.liveTranscription.lastDisplayedText = merged;
+        
+        // Cleanup old snapshots (memory management)
+        pruneSnapshotCache();
+        
+    } catch (error) {
+        console.error('Live snapshot error:', error);
+    }
+}
+
+/**
+ * Calculate RMS of audio samples
+ */
+function calculateRMS(samples) {
+    let sum = 0;
+    for (let i = 0; i < samples.length; i++) {
+        sum += samples[i] * samples[i];
+    }
+    return Math.sqrt(sum / samples.length);
+}
+
+/**
+ * Smart merging of live snapshots with overlap detection
+ */
+function mergeLiveSnapshots(previousText, newText) {
+    if (!previousText) return newText;
+    
+    // Split into words
+    const prevWords = previousText.split(/\s+/);
+    const newWords = newText.split(/\s+/);
+    
+    // Find overlap (last N words of previous = first N words of new)
+    let maxOverlap = 0;
+    let overlapWords = Math.min(prevWords.length, newWords.length, 15); // Check up to 15 words
+    
+    for (let i = 1; i <= overlapWords; i++) {
+        const prevTail = prevWords.slice(-i).join(' ').toLowerCase();
+        const newHead = newWords.slice(0, i).join(' ').toLowerCase();
+        
+        if (prevTail === newHead) {
+            maxOverlap = i;
+        }
+    }
+    
+    if (maxOverlap > 0) {
+        // Found overlap - merge
+        const uniqueNewWords = newWords.slice(maxOverlap);
+        return previousText + ' ' + uniqueNewWords.join(' ');
+    } else {
+        // No overlap - append with space
+        return previousText + ' ' + newText;
+    }
+}
+
+/**
+ * Prune snapshot cache to save memory
+ */
+function pruneSnapshotCache() {
+    // Keep only last N snapshots worth of data
+    if (state.liveTranscription.pendingSnapshots.length > LIVE_CONFIG.cacheSize) {
+        state.liveTranscription.pendingSnapshots = 
+            state.liveTranscription.pendingSnapshots.slice(-LIVE_CONFIG.cacheSize);
+    }
+    
+    // Limit text buffer size (keep last ~300 words)
+    if (state.liveTranscription.lastDisplayedText.length > 2000) {
+        const words = state.liveTranscription.lastDisplayedText.split(/\s+/);
+        state.liveTranscription.lastDisplayedText = words.slice(-300).join(' ');
+    }
+}
+
+/**
+ * Create live transcript display overlay
+ */
+function createLiveTranscriptDisplay() {
+    const container = document.createElement('div');
+    container.id = 'live-transcript-display';
+    container.style.cssText = `
+        position: fixed;
+        bottom: 20px;
+        left: 20px;
+        right: 20px;
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 1rem 1.5rem;
+        background: linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(147, 51, 234, 0.15));
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(59, 130, 246, 0.3);
+        border-radius: 12px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+        z-index: 9999;
+        font-size: 1.1rem;
+        line-height: 1.6;
+        color: #fff;
+        animation: slideUp 0.3s ease-out;
+    `;
+    
+    container.innerHTML = `
+        <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem;">
+            <div class="live-indicator"></div>
+            <span style="font-size: 0.85rem; color: #888; text-transform: uppercase; letter-spacing: 0.05em;">Live Transcription</span>
+            <button onclick="enableLiveTranscription(false)" style="
+                margin-left: auto;
+                padding: 0.25rem 0.75rem;
+                background: rgba(255,255,255,0.1);
+                border: 1px solid rgba(255,255,255,0.2);
+                border-radius: 4px;
+                color: #fff;
+                cursor: pointer;
+                font-size: 0.85rem;
+            ">Stop</button>
+        </div>
+        <div id="live-text-content" style="min-height: 2rem; color: #e0e0e0;"></div>
+    `;
+    
+    document.body.appendChild(container);
+    
+    // Add animation styles
+    if (!document.getElementById('live-mode-styles')) {
+        const style = document.createElement('style');
+        style.id = 'live-mode-styles';
+        style.textContent = `
+            @keyframes slideUp {
+                from { transform: translateY(20px); opacity: 0; }
+                to { transform: translateY(0); opacity: 1; }
+            }
+            .live-indicator {
+                width: 10px;
+                height: 10px;
+                background: #ef4444;
+                border-radius: 50%;
+                animation: livePulse 1.5s ease-in-out infinite;
+            }
+            @keyframes livePulse {
+                0%, 100% { opacity: 1; transform: scale(1); }
+                50% { opacity: 0.5; transform: scale(0.9); }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+}
+
+/**
+ * Update live display with new text
+ */
+function updateLiveDisplay(text) {
+    const display = document.getElementById('live-text-content');
+    if (display) {
+        // Smooth text update with fade
+        display.style.opacity = '0.7';
+        display.textContent = text || 'Listening...';
+        setTimeout(() => {
+            display.style.opacity = '1';
+        }, 100);
+    }
+}
+
+/**
+ * Remove live transcript display
+ */
+function removeLiveTranscriptDisplay() {
+    const display = document.getElementById('live-transcript-display');
+    if (display) {
+        display.style.animation = 'slideUp 0.3s ease-out reverse';
+        setTimeout(() => display.remove(), 300);
     }
 }
 
