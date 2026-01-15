@@ -120,6 +120,15 @@ const state = {
     meetingDB: null,
     // Memory optimization
     lowMemoryMode: false,
+    // Live transcription mode (separate from standard VAD)
+    liveTranscription: {
+        enabled: false,
+        intervalId: null,
+        isProcessing: false,
+        lastDisplayedText: '',
+        pendingSnapshots: [],
+        bufferStartTime: 0
+    },
     // AI Intelligence models (Phase 3)
     aiModels: {
         summarizer: null,           // DistilBART for summarization
@@ -783,6 +792,16 @@ const VAD_CONFIG = {
     silenceFramesNeeded: 25,      // ~0.8s of silence to end utterance
     speechFramesNeeded: 5,        // ~0.15s of speech to start utterance
     maxUtteranceSeconds: 15       // Maximum utterance length before force-split
+};
+
+// Live Transcription Configuration (separate mode)
+const LIVE_CONFIG = {
+    snapshotDuration: 6,           // 6s snapshots (good context)
+    updateInterval: 3,              // Update every 3s (feels real-time)
+    overlapDuration: 2,             // 2s overlap for smooth merging
+    maxConcurrentJobs: 1,           // Process one at a time
+    cacheSize: 8,                   // Keep last 8 snapshots (~24s history)
+    minRMS: 0.008                   // Skip quiet audio
 };
 
 // Remove duplicate sentences from transcript

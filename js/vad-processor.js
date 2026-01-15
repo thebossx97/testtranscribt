@@ -27,6 +27,11 @@ class VADProcessor extends AudioWorkletProcessor {
         this.maxBufferSize = sampleRate * 12; // 12s max utterance
         
         this.frameCount = 0;
+        
+        // LIVE MODE: Continuous buffering for snapshots
+        this.liveMode = false;
+        this.continuousBuffer = [];
+        this.maxContinuousBuffer = sampleRate * 30; // 30s rolling buffer
     }
     
     calculateRMS(samples) {
@@ -119,6 +124,18 @@ class VADProcessor extends AudioWorkletProcessor {
         if (!input || !input[0]) return true;
         
         const samples = input[0];
+        
+        // LIVE MODE: Always buffer for snapshots
+        if (this.liveMode) {
+            this.continuousBuffer.push(new Float32Array(samples));
+            
+            // Maintain rolling buffer (keep last 30s)
+            const totalSamples = this.continuousBuffer.length * 128;
+            if (totalSamples > this.maxContinuousBuffer) {
+                this.continuousBuffer.shift();
+            }
+        }
+        
         const rms = this.calculateRMS(samples);
         const hasSpeech = rms > this.energyThreshold;
         
@@ -264,6 +281,29 @@ class VADProcessor extends AudioWorkletProcessor {
         if (arr.length === 0) return 0;
         const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
         return arr.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / arr.length;
+    }
+    
+    // LIVE MODE: Get snapshot from continuous buffer
+    getSnapshot(durationSeconds) {
+        const sampleCount = Math.floor(sampleRate * durationSeconds);
+        const frameCount = Math.ceil(sampleCount / 128);
+        
+        // Get last N frames
+        const snapshot = this.continuousBuffer.slice(-frameCount);
+        
+        if (snapshot.length === 0) return null;
+        
+        // Combine into single Float32Array
+        const totalLength = snapshot.reduce((sum, chunk) => sum + chunk.length, 0);
+        const combined = new Float32Array(totalLength);
+        
+        let offset = 0;
+        for (const chunk of snapshot) {
+            combined.set(chunk, offset);
+            offset += chunk.length;
+        }
+        
+        return combined;
     }
 }
 
