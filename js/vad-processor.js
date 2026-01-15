@@ -3,31 +3,28 @@ class VADProcessor extends AudioWorkletProcessor {
         super();
         const cfg = options.processorOptions || {};
         
-        // ANTI-HALLUCINATION: Stricter thresholds to avoid noise
-        this.energyThreshold = cfg.energyThreshold ?? 0.012;  // Higher (was 0.008)
-        this.silenceFramesNeeded = cfg.silenceFramesNeeded ?? 40; // Longer silence (was 35)
-        this.speechFramesNeeded = cfg.speechFramesNeeded ?? 5;   // More confirmation (was 3)
+        // More lenient thresholds to catch all speech
+        this.energyThreshold = cfg.energyThreshold ?? 0.008;  // Lower = more sensitive
+        this.silenceFramesNeeded = cfg.silenceFramesNeeded ?? 35; // ~1.1s silence
+        this.speechFramesNeeded = cfg.speechFramesNeeded ?? 3;   // Quicker trigger
         
-        // CRITICAL: Minimum utterance duration to give Whisper context
-        // Short utterances (<3s) cause hallucinations
-        this.minUtteranceDuration = 3.0; // seconds
-        
-        // PRE-ROLL BUFFER: Capture audio BEFORE speech detected (reduced)
-        this.preRollFrames = 10; // ~0.33s (was 15)
+        // PRE-ROLL BUFFER: Capture audio BEFORE speech detected
+        this.preRollFrames = 15; // ~0.5s before speech
         this.preRollBuffer = [];
-        this.maxPreRollSize = 15; // (was 20)
+        this.maxPreRollSize = 20;
         
-        // POST-ROLL: Keep capturing after silence starts (reduced)
-        this.postRollFrames = 8; // ~0.26s (was 10)
+        // POST-ROLL: Keep capturing after silence starts
+        this.postRollFrames = 10; // ~0.3s after silence
         
         this.isSpeaking = false;
         this.silenceFrames = 0;
         this.speechFrames = 0;
         this.speechBuffer = [];
         this.speechStartTime = 0;
-        
-        // Max utterance: 15s (balance between context and memory)
-        this.maxBufferSize = sampleRate * 15;
+        // MEMORY OPTIMIZATION: Reduced from 20s to 12s
+        // Shorter utterances = smaller tensors = lower memory usage
+        // Whisper handles multiple short utterances better than one long one
+        this.maxBufferSize = sampleRate * 12; // 12s max utterance
         
         this.frameCount = 0;
     }
@@ -38,25 +35,6 @@ class VADProcessor extends AudioWorkletProcessor {
             sum += samples[i] * samples[i];
         }
         return Math.sqrt(sum / samples.length);
-    }
-    
-    // ANTI-HALLUCINATION: Enhanced voice detection
-    // Real speech has energy AND variation (not just noise)
-    hasRealSpeech(samples) {
-        const rms = this.calculateRMS(samples);
-        
-        // Must have minimum energy
-        if (rms < this.energyThreshold) return false;
-        
-        // Check for variation (real speech has dynamics, noise doesn't)
-        let max = 0, min = 0;
-        for (let i = 0; i < samples.length; i++) {
-            if (samples[i] > max) max = samples[i];
-            if (samples[i] < min) min = samples[i];
-        }
-        
-        const dynamicRange = max - min;
-        return dynamicRange > 0.02; // Must have some dynamics
     }
     
     // Improved pitch detection using autocorrelation
@@ -141,8 +119,8 @@ class VADProcessor extends AudioWorkletProcessor {
         if (!input || !input[0]) return true;
         
         const samples = input[0];
-        // Use enhanced detection instead of simple RMS
-        const hasSpeech = this.hasRealSpeech(samples);
+        const rms = this.calculateRMS(samples);
+        const hasSpeech = rms > this.energyThreshold;
         
         // Always maintain pre-roll buffer
         this.preRollBuffer.push(new Float32Array(samples));
@@ -198,30 +176,12 @@ class VADProcessor extends AudioWorkletProcessor {
     
     endUtterance() {
         const totalLength = this.speechBuffer.reduce((sum, chunk) => sum + chunk.length, 0);
-        const durationSeconds = totalLength / sampleRate;
-        
-        // CRITICAL: Reject utterances that are too short
-        // Short utterances (<3s) cause Whisper hallucinations
-        if (durationSeconds < this.minUtteranceDuration) {
-            console.log(`⏭️ Utterance too short (${durationSeconds.toFixed(1)}s), skipping`);
-            this.resetState();
-            return;
-        }
-        
         const combined = new Float32Array(totalLength);
         
         let offset = 0;
         for (const chunk of this.speechBuffer) {
             combined.set(chunk, offset);
             offset += chunk.length;
-        }
-        
-        // Additional RMS check on full utterance
-        const avgRMS = this.calculateRMS(combined);
-        if (avgRMS < this.energyThreshold * 0.8) {
-            console.log(`⏭️ Utterance too quiet (RMS: ${avgRMS.toFixed(4)}), skipping`);
-            this.resetState();
-            return;
         }
         
         // Calculate speaker features
@@ -231,14 +191,10 @@ class VADProcessor extends AudioWorkletProcessor {
             type: 'speech_end',
             audio: combined,
             timestamp: this.speechStartTime,
-            duration: durationSeconds.toFixed(2),
+            duration: (currentTime - this.speechStartTime).toFixed(2),
             features: features // For speaker clustering
         });
         
-        this.resetState();
-    }
-    
-    resetState() {
         this.isSpeaking = false;
         
         // MEMORY OPTIMIZATION: Explicitly clear buffers and trim pre-roll

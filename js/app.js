@@ -839,32 +839,19 @@ async function transcribeUtteranceWithDiarization(audioFloat32, startTime, featu
     try {
         state.isTranscribing = true;
         
-        const duration = audioFloat32.length / VAD_CONFIG.sampleRate;
-        console.log(`📊 Transcribing ${duration.toFixed(1)}s utterance...`);
+        console.log(`📊 Transcribing ${audioFloat32.length} samples...`);
         
-        // PRE-VALIDATION: Check audio quality
-        const rms = calculateRMS(audioFloat32);
-        if (rms < 0.01) {
-            console.log('⏭️ Audio too quiet (RMS: ${rms.toFixed(4)}), skipping transcription');
-            return;
-        }
-        
-        // Transcribe with ANTI-HALLUCINATION settings
+        // Transcribe with WORD-LEVEL timestamps
         const language = els.languageSelect ? els.languageSelect.value : null;
         const options = {
             chunk_length_s: 30,
             stride_length_s: 5,
-            return_timestamps: 'word',  // Word-level timestamps
+            return_timestamps: 'word',  // KEY: Word-level timestamps!
+            condition_on_previous_text: false,  // Prevent hallucination feedback loops
             
-            // CRITICAL: Prevent hallucination
-            condition_on_previous_text: false,  // ALWAYS false
-            
-            // Better decoding
-            num_beams: 5,                       // More beams = better quality
-            temperature: 0.0,                   // Greedy = no randomness
-            compression_ratio_threshold: 2.4,   // Detect repetition
-            logprob_threshold: -1.0,            // Reject low-confidence
-            no_speech_threshold: 0.6            // Skip if likely no speech
+            // BALANCED: Light anti-hallucination (not too strict)
+            compression_ratio_threshold: 2.8,   // Only block extreme repetition (was 2.4)
+            no_speech_threshold: 0.7            // Only skip very quiet audio (was 0.6)
         };
         
         if (language) {
@@ -880,53 +867,34 @@ async function transcribeUtteranceWithDiarization(audioFloat32, startTime, featu
         const chunks = result.chunks || [];
         
         if (!text || text.length === 0) {
-            console.log('⏭️ Empty transcription');
+            console.log('⏭️ Empty transcription, skipping');
             return;
         }
         
-        // CRITICAL: Detect and block repetition
-        if (isRepetitive(text)) {
-            console.warn('🚫 Blocked repetitive transcription:', text.substring(0, 100));
-            showAlert('⚠️ Skipped repetitive audio (likely noise)', 'warning');
+        // LIGHT anti-hallucination: Only block extreme repetition
+        if (isExtremeRepetition(text)) {
+            console.warn('🚫 Blocked extreme repetition:', text.substring(0, 100));
+            showAlert('⚠️ Skipped repetitive audio', 'warning');
             return;
         }
         
-        // CRITICAL: Check compression ratio (Whisper's built-in hallucination detector)
-        if (result.compression_ratio && result.compression_ratio > 2.4) {
-            console.warn('🚫 High compression ratio, likely hallucination:', result.compression_ratio);
-            showAlert('⚠️ Skipped low-quality audio', 'warning');
-            return;
-        }
-        
-        // Deduplicate against recent utterances
-        if (isDuplicateOfRecent(text)) {
-            console.log('⏭️ Duplicate of recent utterance, skipping');
-            return;
-        }
-        
-        // ALL CHECKS PASSED - proceed
+        // Identify speaker
         const speakerId = identifySpeaker(features);
         const speaker = state.speakers[speakerId];
         
-        // Store utterance with quality metrics
+        // Store utterance
         const utterance = {
             id: state.utterances.length,
             text: text,
             speaker: speaker,
             speakerId: speakerId,
             timestamp: startTime,
-            duration: duration,
+            duration: audioFloat32.length / VAD_CONFIG.sampleRate,
             features: features,
-            chunks: chunks,  // Word-level timestamps
-            quality: {
-                rms: rms,
-                compressionRatio: result.compression_ratio || 0,
-                avgLogprob: result.avg_logprob || 0
-            }
+            chunks: chunks  // Word-level timestamps
         };
         
-        // Add with safety checks
-        addUtteranceSafely(utterance);
+        state.utterances.push(utterance);
         
         // Update display
         updateDiarizedTranscript();
@@ -2590,224 +2558,35 @@ function formatDuration(seconds) {
     }
 }
 
-// ============================================================================
-// SAFETY LIMITS: MEMORY PROTECTION
-// ============================================================================
-
-const SAFETY_LIMITS = {
-    maxUtteranceLength: 500,        // characters
-    maxTranscriptLength: 50000,     // characters total
-    maxUtterances: 1000,            // total utterances
-    maxSpeakers: 8
-};
-
 /**
- * Add utterance with safety checks
+ * LIGHT anti-hallucination: Only detect EXTREME repetition
+ * This is not aggressive - only blocks obvious hallucination loops
  */
-function addUtteranceSafely(utterance) {
-    // Length check
-    if (utterance.text.length > SAFETY_LIMITS.maxUtteranceLength) {
-        console.warn('⚠️ Utterance too long, truncating');
-        utterance.text = utterance.text.substring(0, SAFETY_LIMITS.maxUtteranceLength) + '...';
-    }
+function isExtremeRepetition(text) {
+    // Only check if text is long enough to be suspicious
+    if (text.length < 100) return false;
     
-    // Total transcript check
-    const currentLength = state.utterances.reduce((sum, u) => sum + u.text.length, 0);
-    if (currentLength > SAFETY_LIMITS.maxTranscriptLength) {
-        console.warn('⚠️ Transcript too long, archiving old utterances');
-        archiveOldUtterances();
-    }
+    const words = text.toLowerCase().split(/\s+/);
+    if (words.length < 20) return false;
     
-    // Count check
-    if (state.utterances.length >= SAFETY_LIMITS.maxUtterances) {
-        console.warn('⚠️ Too many utterances, archiving');
-        archiveOldUtterances();
-    }
-    
-    state.utterances.push(utterance);
-}
-
-/**
- * Archive old utterances to IndexedDB to save memory
- */
-async function archiveOldUtterances() {
-    // Keep last 500 in memory, save rest to IndexedDB
-    const toArchive = state.utterances.slice(0, -500);
-    const toKeep = state.utterances.slice(-500);
-    
-    if (toArchive.length > 0) {
-        try {
-            await saveMeetingSegmentToDB({
-                ...state.currentMeeting,
-                utterances: toArchive,
-                isArchiveSegment: true,
-                segmentTime: Date.now()
-            });
-            
-            state.utterances = toKeep;
-            showAlert(`📦 Archived ${toArchive.length} old utterances to save memory`, 'success');
-        } catch (error) {
-            console.error('Failed to archive utterances:', error);
-        }
-    }
-}
-
-/**
- * Save meeting segment to IndexedDB
- */
-async function saveMeetingSegmentToDB(segment) {
-    if (!state.meetingDB) await initMeetingDB();
-    
-    return new Promise((resolve, reject) => {
-        const transaction = state.meetingDB.transaction(['meetings'], 'readwrite');
-        const store = transaction.objectStore('meetings');
-        
-        const request = store.put(segment);
-        
-        request.onsuccess = () => resolve();
-        request.onerror = () => reject(request.error);
-    });
-}
-
-// ============================================================================
-// ANTI-HALLUCINATION: REPETITION DETECTION
-// ============================================================================
-
-/**
- * Detect if text is repetitive (Whisper hallucination)
- * Uses multiple methods to catch different types of repetition
- */
-function isRepetitive(text) {
-    // Split into words
-    const words = text.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-    
-    if (words.length < 10) return false; // Too short to judge
-    
-    // Method 1: Check for exact repeating sequences
-    for (let seqLen = 3; seqLen <= 10; seqLen++) {
+    // Only block if same 5+ word sequence repeats 5+ times
+    // This catches "thank you thank you thank you..." x50 but not normal speech
+    for (let seqLen = 5; seqLen <= 10; seqLen++) {
         const sequences = new Map();
         
         for (let i = 0; i <= words.length - seqLen; i++) {
             const sequence = words.slice(i, i + seqLen).join(' ');
             sequences.set(sequence, (sequences.get(sequence) || 0) + 1);
             
-            // If any sequence repeats 3+ times, it's hallucination
-            if (sequences.get(sequence) >= 3) {
-                console.log(`🚫 Found ${sequences.get(sequence)}x repetition:`, sequence);
+            // Only block if repeated 5+ times (very extreme)
+            if (sequences.get(sequence) >= 5) {
+                console.log(`🚫 Extreme repetition (${sequences.get(sequence)}x):`, sequence);
                 return true;
             }
         }
     }
     
-    // Method 2: Check word-level repetition rate
-    const uniqueWords = new Set(words);
-    const repetitionRatio = 1 - (uniqueWords.size / words.length);
-    
-    if (repetitionRatio > 0.5) {
-        console.log(`🚫 High word repetition: ${(repetitionRatio * 100).toFixed(1)}%`);
-        return true;
-    }
-    
-    // Method 3: Check for common hallucination patterns
-    const hallucinationPatterns = [
-        /(\w+\s+){20,}\1/,  // Same word/phrase 20+ times
-        /thank you for watching/i,
-        /please subscribe/i,
-        /like and subscribe/i,
-        /\[music\]/i,
-        /\[applause\]/i
-    ];
-    
-    for (const pattern of hallucinationPatterns) {
-        if (pattern.test(text)) {
-            console.log('🚫 Hallucination pattern detected:', pattern);
-            return true;
-        }
-    }
-    
     return false;
-}
-
-/**
- * Check if text is duplicate of recent utterances
- */
-function isDuplicateOfRecent(text) {
-    if (state.utterances.length === 0) return false;
-    
-    // Check last 3 utterances
-    const recent = state.utterances.slice(-3);
-    const normalized = text.toLowerCase().trim().replace(/[^a-z0-9\s]/g, '');
-    
-    for (const utt of recent) {
-        const uttNormalized = utt.text.toLowerCase().trim().replace(/[^a-z0-9\s]/g, '');
-        
-        // Exact match
-        if (normalized === uttNormalized) return true;
-        
-        // 90%+ similarity
-        const similarity = stringSimilarity(normalized, uttNormalized);
-        if (similarity > 0.9) {
-            console.log(`⏭️ ${(similarity * 100).toFixed(0)}% similar to recent utterance`);
-            return true;
-        }
-    }
-    
-    return false;
-}
-
-/**
- * Calculate string similarity (0-1)
- */
-function stringSimilarity(s1, s2) {
-    const longer = s1.length > s2.length ? s1 : s2;
-    const shorter = s1.length > s2.length ? s2 : s1;
-    
-    if (longer.length === 0) return 1.0;
-    
-    const editDistance = levenshteinDistance(longer, shorter);
-    return (longer.length - editDistance) / longer.length;
-}
-
-/**
- * Calculate Levenshtein distance between two strings
- */
-function levenshteinDistance(s1, s2) {
-    const matrix = [];
-    
-    for (let i = 0; i <= s2.length; i++) {
-        matrix[i] = [i];
-    }
-    
-    for (let j = 0; j <= s1.length; j++) {
-        matrix[0][j] = j;
-    }
-    
-    for (let i = 1; i <= s2.length; i++) {
-        for (let j = 1; j <= s1.length; j++) {
-            if (s2.charAt(i - 1) === s1.charAt(j - 1)) {
-                matrix[i][j] = matrix[i - 1][j - 1];
-            } else {
-                matrix[i][j] = Math.min(
-                    matrix[i - 1][j - 1] + 1,
-                    matrix[i][j - 1] + 1,
-                    matrix[i - 1][j] + 1
-                );
-            }
-        }
-    }
-    
-    return matrix[s2.length][s1.length];
-}
-
-/**
- * Calculate RMS of audio samples
- */
-function calculateRMS(samples) {
-    let sum = 0;
-    for (let i = 0; i < samples.length; i++) {
-        sum += samples[i] * samples[i];
-    }
-    return Math.sqrt(sum / samples.length);
 }
 
 /**
