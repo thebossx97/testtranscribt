@@ -229,6 +229,52 @@
                             <p class="empty-state">No topics detected yet.</p>
                         </div>
                     </div>
+
+                    <!-- Questions Section -->
+                    <div class="intelligence-section">
+                        <h3>❓ Questions</h3>
+                        <div id="questionsList" class="questions-list">
+                            <p class="empty-state">No questions detected yet.</p>
+                        </div>
+                    </div>
+
+                    <!-- Sentiment Section -->
+                    <div class="intelligence-section">
+                        <h3>😊 Sentiment Analysis</h3>
+                        <div id="sentimentDisplay" class="sentiment-display">
+                            <div class="sentiment-gauge">
+                                <div class="sentiment-bar">
+                                    <div class="sentiment-positive" id="sentimentPositive" style="width: 0%"></div>
+                                    <div class="sentiment-neutral" id="sentimentNeutral" style="width: 0%"></div>
+                                    <div class="sentiment-negative" id="sentimentNegative" style="width: 0%"></div>
+                                </div>
+                                <div class="sentiment-labels">
+                                    <span class="sentiment-label">
+                                        <span class="sentiment-dot positive"></span>
+                                        Positive: <strong id="sentimentPositiveCount">0</strong>
+                                    </span>
+                                    <span class="sentiment-label">
+                                        <span class="sentiment-dot neutral"></span>
+                                        Neutral: <strong id="sentimentNeutralCount">0</strong>
+                                    </span>
+                                    <span class="sentiment-label">
+                                        <span class="sentiment-dot negative"></span>
+                                        Negative: <strong id="sentimentNegativeCount">0</strong>
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Export Section -->
+                    <div class="intelligence-section">
+                        <h3>📤 Export</h3>
+                        <div class="export-buttons">
+                            <button id="exportMarkdownBtn" class="btn btn-secondary">📄 Export Markdown</button>
+                            <button id="exportJsonBtn" class="btn btn-secondary">📊 Export JSON</button>
+                            <button id="exportTextBtn" class="btn btn-secondary">📝 Export Text</button>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Empty State -->

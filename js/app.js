@@ -196,7 +196,17 @@ const els = {
     summaryExecutive: document.getElementById('summaryExecutive'),
     actionItemsList: document.getElementById('actionItemsList'),
     decisionsList: document.getElementById('decisionsList'),
-    topicsList: document.getElementById('topicsList')
+    topicsList: document.getElementById('topicsList'),
+    questionsList: document.getElementById('questionsList'),
+    sentimentPositive: document.getElementById('sentimentPositive'),
+    sentimentNeutral: document.getElementById('sentimentNeutral'),
+    sentimentNegative: document.getElementById('sentimentNegative'),
+    sentimentPositiveCount: document.getElementById('sentimentPositiveCount'),
+    sentimentNeutralCount: document.getElementById('sentimentNeutralCount'),
+    sentimentNegativeCount: document.getElementById('sentimentNegativeCount'),
+    exportMarkdownBtn: document.getElementById('exportMarkdownBtn'),
+    exportJsonBtn: document.getElementById('exportJsonBtn'),
+    exportTextBtn: document.getElementById('exportTextBtn')
 };
 
 // Utility functions
@@ -1535,6 +1545,17 @@ function initializeApp() {
         });
     }
     
+    // Phase 3: Export buttons
+    if (els.exportMarkdownBtn) {
+        els.exportMarkdownBtn.addEventListener('click', exportToMarkdown);
+    }
+    if (els.exportJsonBtn) {
+        els.exportJsonBtn.addEventListener('click', exportToJSON);
+    }
+    if (els.exportTextBtn) {
+        els.exportTextBtn.addEventListener('click', exportToText);
+    }
+    
     // Manual model load button
     if (els.loadModelBtn) {
         els.loadModelBtn.addEventListener('click', () => {
@@ -2136,6 +2157,41 @@ function renderIntelligenceData() {
             `).join('');
         }
     }
+    
+    // Render questions
+    if (els.questionsList) {
+        if (intel.questions.length === 0) {
+            els.questionsList.innerHTML = '<p class="empty-state">No questions detected.</p>';
+        } else {
+            els.questionsList.innerHTML = intel.questions.map(question => `
+                <div class="question-item ${question.answered ? '' : 'unanswered'}">
+                    <div class="question-text">${escapeHtml(question.text)}</div>
+                    <div class="question-meta">
+                        <span>👤 ${question.speaker ? escapeHtml(question.speaker.name) : 'Unknown'}</span>
+                        <span class="question-status ${question.answered ? 'answered' : 'unanswered'}">
+                            ${question.answered ? '✓ Answered' : '⚠️ Unanswered'}
+                        </span>
+                    </div>
+                </div>
+            `).join('');
+        }
+    }
+    
+    // Render sentiment
+    const totalSentiment = intel.sentiment.positive + intel.sentiment.neutral + intel.sentiment.negative;
+    if (totalSentiment > 0) {
+        const positivePercent = (intel.sentiment.positive / totalSentiment) * 100;
+        const neutralPercent = (intel.sentiment.neutral / totalSentiment) * 100;
+        const negativePercent = (intel.sentiment.negative / totalSentiment) * 100;
+        
+        if (els.sentimentPositive) els.sentimentPositive.style.width = positivePercent + '%';
+        if (els.sentimentNeutral) els.sentimentNeutral.style.width = neutralPercent + '%';
+        if (els.sentimentNegative) els.sentimentNegative.style.width = negativePercent + '%';
+        
+        if (els.sentimentPositiveCount) els.sentimentPositiveCount.textContent = intel.sentiment.positive;
+        if (els.sentimentNeutralCount) els.sentimentNeutralCount.textContent = intel.sentiment.neutral;
+        if (els.sentimentNegativeCount) els.sentimentNegativeCount.textContent = intel.sentiment.negative;
+    }
 }
 
 /**
@@ -2145,6 +2201,230 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+/**
+ * Export intelligence data to Markdown format
+ */
+function exportToMarkdown() {
+    const intel = state.meetingIntelligence;
+    const meeting = state.currentMeeting;
+    
+    if (!intel.summary.executive) {
+        showAlert('No intelligence data to export. Generate intelligence first.', 'warning');
+        return;
+    }
+    
+    let markdown = '';
+    
+    // Header
+    markdown += `# Meeting Intelligence Report\n\n`;
+    
+    if (meeting) {
+        markdown += `**Meeting:** ${meeting.title}\n`;
+        markdown += `**Date:** ${new Date(meeting.startTime).toLocaleString()}\n`;
+        markdown += `**Duration:** ${formatDuration(meeting.duration)}\n`;
+        markdown += `**Speakers:** ${state.speakers.length}\n\n`;
+    }
+    
+    markdown += `---\n\n`;
+    
+    // Executive Summary
+    markdown += `## 📄 Executive Summary\n\n`;
+    markdown += `${intel.summary.executive}\n\n`;
+    
+    // Action Items
+    if (intel.actionItems.length > 0) {
+        markdown += `## ✅ Action Items (${intel.actionItems.length})\n\n`;
+        intel.actionItems.forEach(action => {
+            const checkbox = action.status === 'done' ? '[x]' : '[ ]';
+            const priority = action.priority === 'urgent' ? '🔴' : action.priority === 'high' ? '🟡' : '🟢';
+            markdown += `- ${checkbox} **${action.assignee}:** ${action.text}`;
+            if (action.deadline) markdown += ` *(by ${action.deadline})*`;
+            markdown += ` ${priority}\n`;
+        });
+        markdown += `\n`;
+    }
+    
+    // Decisions
+    if (intel.decisions.length > 0) {
+        markdown += `## 🎯 Key Decisions (${intel.decisions.length})\n\n`;
+        intel.decisions.forEach(decision => {
+            markdown += `- ✓ ${decision.text}\n`;
+            markdown += `  - *${decision.speaker ? decision.speaker.name : 'Unknown'}*\n`;
+        });
+        markdown += `\n`;
+    }
+    
+    // Topics
+    if (intel.topics.length > 0) {
+        markdown += `## 💡 Main Topics\n\n`;
+        intel.topics.forEach(topic => {
+            markdown += `- **${topic.text}** (${topic.count} mentions)\n`;
+        });
+        markdown += `\n`;
+    }
+    
+    // Questions
+    if (intel.questions.length > 0) {
+        const unanswered = intel.questions.filter(q => !q.answered);
+        if (unanswered.length > 0) {
+            markdown += `## ❓ Unanswered Questions\n\n`;
+            unanswered.forEach(question => {
+                markdown += `- ${question.text}\n`;
+                markdown += `  - *Asked by ${question.speaker ? question.speaker.name : 'Unknown'}*\n`;
+            });
+            markdown += `\n`;
+        }
+    }
+    
+    // Sentiment
+    const totalSentiment = intel.sentiment.positive + intel.sentiment.neutral + intel.sentiment.negative;
+    if (totalSentiment > 0) {
+        markdown += `## 😊 Sentiment Analysis\n\n`;
+        markdown += `- Positive: ${intel.sentiment.positive} (${Math.round((intel.sentiment.positive / totalSentiment) * 100)}%)\n`;
+        markdown += `- Neutral: ${intel.sentiment.neutral} (${Math.round((intel.sentiment.neutral / totalSentiment) * 100)}%)\n`;
+        markdown += `- Negative: ${intel.sentiment.negative} (${Math.round((intel.sentiment.negative / totalSentiment) * 100)}%)\n\n`;
+    }
+    
+    // Footer
+    markdown += `---\n\n`;
+    markdown += `*Generated by Local Whisper Transcriber on ${new Date().toLocaleString()}*\n`;
+    
+    // Download
+    downloadFile(markdown, `meeting-intelligence-${Date.now()}.md`, 'text/markdown');
+    showAlert('✓ Exported to Markdown', 'success');
+}
+
+/**
+ * Export intelligence data to JSON format
+ */
+function exportToJSON() {
+    const intel = state.meetingIntelligence;
+    const meeting = state.currentMeeting;
+    
+    if (!intel.summary.executive) {
+        showAlert('No intelligence data to export. Generate intelligence first.', 'warning');
+        return;
+    }
+    
+    const exportData = {
+        meeting: meeting ? {
+            title: meeting.title,
+            startTime: meeting.startTime,
+            duration: meeting.duration,
+            speakers: state.speakers.length
+        } : null,
+        intelligence: intel,
+        exportedAt: new Date().toISOString()
+    };
+    
+    const json = JSON.stringify(exportData, null, 2);
+    downloadFile(json, `meeting-intelligence-${Date.now()}.json`, 'application/json');
+    showAlert('✓ Exported to JSON', 'success');
+}
+
+/**
+ * Export intelligence data to plain text format
+ */
+function exportToText() {
+    const intel = state.meetingIntelligence;
+    const meeting = state.currentMeeting;
+    
+    if (!intel.summary.executive) {
+        showAlert('No intelligence data to export. Generate intelligence first.', 'warning');
+        return;
+    }
+    
+    let text = '';
+    
+    // Header
+    text += `MEETING INTELLIGENCE REPORT\n`;
+    text += `${'='.repeat(50)}\n\n`;
+    
+    if (meeting) {
+        text += `Meeting: ${meeting.title}\n`;
+        text += `Date: ${new Date(meeting.startTime).toLocaleString()}\n`;
+        text += `Duration: ${formatDuration(meeting.duration)}\n`;
+        text += `Speakers: ${state.speakers.length}\n\n`;
+    }
+    
+    // Executive Summary
+    text += `EXECUTIVE SUMMARY\n`;
+    text += `${'-'.repeat(50)}\n`;
+    text += `${intel.summary.executive}\n\n`;
+    
+    // Action Items
+    if (intel.actionItems.length > 0) {
+        text += `ACTION ITEMS (${intel.actionItems.length})\n`;
+        text += `${'-'.repeat(50)}\n`;
+        intel.actionItems.forEach((action, i) => {
+            text += `${i + 1}. ${action.assignee}: ${action.text}`;
+            if (action.deadline) text += ` (by ${action.deadline})`;
+            text += ` [${action.priority.toUpperCase()}]\n`;
+        });
+        text += `\n`;
+    }
+    
+    // Decisions
+    if (intel.decisions.length > 0) {
+        text += `KEY DECISIONS (${intel.decisions.length})\n`;
+        text += `${'-'.repeat(50)}\n`;
+        intel.decisions.forEach((decision, i) => {
+            text += `${i + 1}. ${decision.text}\n`;
+            text += `   - ${decision.speaker ? decision.speaker.name : 'Unknown'}\n`;
+        });
+        text += `\n`;
+    }
+    
+    // Topics
+    if (intel.topics.length > 0) {
+        text += `MAIN TOPICS\n`;
+        text += `${'-'.repeat(50)}\n`;
+        intel.topics.forEach(topic => {
+            text += `- ${topic.text} (${topic.count} mentions)\n`;
+        });
+        text += `\n`;
+    }
+    
+    // Footer
+    text += `${'-'.repeat(50)}\n`;
+    text += `Generated: ${new Date().toLocaleString()}\n`;
+    
+    downloadFile(text, `meeting-intelligence-${Date.now()}.txt`, 'text/plain');
+    showAlert('✓ Exported to Text', 'success');
+}
+
+/**
+ * Helper function to download a file
+ */
+function downloadFile(content, filename, mimeType) {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
+/**
+ * Format duration in seconds to readable string
+ */
+function formatDuration(seconds) {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+    
+    if (hours > 0) {
+        return `${hours}h ${minutes}m ${secs}s`;
+    } else if (minutes > 0) {
+        return `${minutes}m ${secs}s`;
+    } else {
+        return `${secs}s`;
+    }
 }
 
 /**
