@@ -1510,19 +1510,27 @@ function initializeApp() {
     // Phase 3: Load AI models button
     if (els.loadAIModelsBtn) {
         els.loadAIModelsBtn.addEventListener('click', async () => {
+            console.log('\n🔘 User clicked "Load AI Models" button');
+            
             els.loadAIModelsBtn.disabled = true;
+            els.loadAIModelsBtn.textContent = '⏳ Loading...';
             els.aiLoadingProgress.style.display = 'block';
+            els.aiStatusText.textContent = 'Loading AI models...';
             
             const success = await loadIntelligenceModels();
             
             els.aiLoadingProgress.style.display = 'none';
             
             if (success) {
+                console.log('✅ Model loading succeeded - updating UI');
                 els.aiModelStatus.classList.add('loaded');
-                els.aiStatusText.textContent = 'AI models loaded and ready';
+                els.aiStatusText.textContent = '✅ AI models loaded - AI-powered summarization available';
                 els.loadAIModelsBtn.style.display = 'none';
             } else {
+                console.log('❌ Model loading failed - using rule-based fallback');
+                els.aiStatusText.textContent = '⚠️ Using rule-based intelligence (AI model failed to load)';
                 els.loadAIModelsBtn.disabled = false;
+                els.loadAIModelsBtn.textContent = '🔄 Retry Loading AI Models';
             }
         });
     }
@@ -1924,78 +1932,89 @@ async function loadIntelligenceModels() {
     // Already loaded
     if (state.aiModels.modelsLoaded) {
         console.log('✓ AI models already loaded');
+        showAlert('✓ AI models already loaded', 'success');
         return true;
     }
     
     // Already loading
     if (state.aiModels.isLoading) {
         console.log('⏳ AI models already loading...');
+        showAlert('⏳ AI models already loading...', 'warning');
         return false;
     }
     
     state.aiModels.isLoading = true;
     state.aiModels.loadProgress = 0;
     
+    console.log('\n' + '='.repeat(60));
+    console.log('🚀 ATTEMPTING TO LOAD DISTILBART AI MODEL');
+    console.log('='.repeat(60));
+    
     try {
-        console.log('=== Loading AI Intelligence Models ===');
-        console.log('Pipeline available:', typeof pipeline);
-        console.log('Env available:', typeof env);
-        
         // Check if transformers.js is available
+        console.log('Step 1: Checking Transformers.js availability...');
         if (!pipeline || !env) {
             console.error('❌ Transformers.js not initialized');
-            console.error('window.pipeline:', typeof window.pipeline);
-            console.error('window.env:', typeof window.env);
             throw new Error('Transformers.js not initialized. Please refresh the page.');
         }
-        
-        console.log('✓ Transformers.js available');
-        console.log('Env config:', {
-            allowLocalModels: env.allowLocalModels,
-            backends: env.backends
-        });
+        console.log('✅ Transformers.js is available');
         
         // Update UI - show loading state
-        showAlert('Loading AI models for intelligence features...', 'warning');
+        showAlert('🔄 Loading DistilBART AI model (268MB)... This may take 2-5 minutes on first load.', 'warning');
         
         // Check if model is already cached
         const modelId = 'Xenova/distilbart-cnn-6-6';
-        console.log('Loading model:', modelId);
+        console.log('\nStep 2: Checking model cache...');
         const isCached = await isAIModelCached(modelId);
         
         if (isCached) {
-            console.log('✓ Model found in cache, loading will be faster');
+            console.log('✅ Model found in cache - loading will be faster');
+            showAlert('📦 Model found in cache - loading...', 'warning');
         } else {
-            console.log('⏳ First-time model download (268MB), this will take a few minutes...');
+            console.log('⚠️ First-time download (268MB) - this will take a few minutes');
+            showAlert('📥 First-time download (268MB) - please wait 2-5 minutes...', 'warning');
         }
         
-        // Load DistilBART for summarization (268MB)
-        // Using same simple approach as Whisper models
-        console.log('Loading DistilBART summarization model...');
+        // Load DistilBART for summarization
+        console.log('\nStep 3: Loading DistilBART model...');
+        console.log('Model ID:', modelId);
+        console.log('Task: summarization');
+        
         state.aiModels.loadProgress = 10;
+        
+        const startTime = Date.now();
         
         state.aiModels.summarizer = await pipeline(
             'summarization',
             modelId,
             {
                 progress_callback: (progress) => {
+                    console.log('Progress update:', progress);
+                    
                     if (progress.status === 'progress' && progress.progress !== undefined) {
                         state.aiModels.loadProgress = 10 + Math.round(progress.progress * 0.8);
-                        console.log(`Model loading: ${state.aiModels.loadProgress}%`);
+                        const elapsed = Math.round((Date.now() - startTime) / 1000);
+                        
+                        console.log(`📊 Loading: ${state.aiModels.loadProgress}% (${elapsed}s elapsed)`);
                         
                         // Update UI progress
                         if (els.aiProgressFill) {
                             els.aiProgressFill.style.width = state.aiModels.loadProgress + '%';
                         }
                         if (els.aiProgressText) {
-                            els.aiProgressText.textContent = `Loading model: ${state.aiModels.loadProgress}%`;
+                            els.aiProgressText.textContent = `Loading: ${state.aiModels.loadProgress}% (${elapsed}s)`;
                         }
                     }
                 }
             }
         );
         
-        console.log('✓ DistilBART model loaded successfully');
+        const totalTime = Math.round((Date.now() - startTime) / 1000);
+        
+        console.log('\n✅ SUCCESS! DistilBART model loaded');
+        console.log(`⏱️ Total time: ${totalTime} seconds`);
+        console.log('Model type:', typeof state.aiModels.summarizer);
+        
         state.aiModels.loadProgress = 100;
         
         // Cache metadata for future reference
@@ -2005,26 +2024,42 @@ async function loadIntelligenceModels() {
         state.aiModels.modelsLoaded = true;
         state.aiModels.isLoading = false;
         
-        showAlert('✓ AI models loaded successfully', 'success');
-        console.log('=== AI Intelligence Models Ready ===');
+        console.log('='.repeat(60));
+        console.log('🎉 AI MODEL READY FOR USE');
+        console.log('='.repeat(60) + '\n');
+        
+        showAlert(`✅ SUCCESS! AI model loaded in ${totalTime}s. AI-powered summarization now available!`, 'success');
         
         return true;
         
     } catch (error) {
-        console.error('❌ Failed to load AI models:', error);
-        console.error('Error name:', error.name);
+        const errorTime = Math.round((Date.now() - (startTime || Date.now())) / 1000);
+        
+        console.log('\n' + '='.repeat(60));
+        console.error('❌ FAILED TO LOAD AI MODEL');
+        console.log('='.repeat(60));
+        console.error('Error type:', error.name);
         console.error('Error message:', error.message);
-        console.error('Error stack:', error.stack);
+        console.error('Time elapsed:', errorTime + 's');
+        console.error('Full error:', error);
+        console.log('='.repeat(60) + '\n');
         
         state.aiModels.isLoading = false;
         state.aiModels.loadProgress = 0;
         
-        // Check if it's a CSP error
+        // Detailed error feedback
+        let errorMsg = '';
         if (error.message.includes('eval') || error.message.includes('CSP') || error.message.includes('Content Security Policy')) {
-            showAlert(`CSP Error: ${error.message}. Check browser console for details.`, 'error');
+            errorMsg = `❌ CSP ERROR: Browser security policy blocks AI model.\n\nThe model requires 'eval()' which is blocked by Content Security Policy.\n\nFalling back to rule-based intelligence (still very effective!)`;
+            console.error('💡 This is a CSP (Content Security Policy) issue');
+            console.error('💡 Rule-based processing will be used instead');
+        } else if (error.message.includes('network') || error.message.includes('fetch')) {
+            errorMsg = `❌ NETWORK ERROR: Could not download model.\n\nCheck your internet connection and try again.\n\nFalling back to rule-based intelligence.`;
         } else {
-            showAlert(`Failed to load AI models: ${error.message}. Using rule-based fallback.`, 'warning');
+            errorMsg = `❌ ERROR: ${error.message}\n\nFalling back to rule-based intelligence (still very effective!)`;
         }
+        
+        showAlert(errorMsg, 'error');
         
         // Return false but don't throw - we'll use rule-based fallback
         return false;
