@@ -21,7 +21,10 @@ class VADProcessor extends AudioWorkletProcessor {
         this.speechFrames = 0;
         this.speechBuffer = [];
         this.speechStartTime = 0;
-        this.maxBufferSize = sampleRate * 20; // 20s max utterance
+        // MEMORY OPTIMIZATION: Reduced from 20s to 12s
+        // Shorter utterances = smaller tensors = lower memory usage
+        // Whisper handles multiple short utterances better than one long one
+        this.maxBufferSize = sampleRate * 12; // 12s max utterance
         
         this.frameCount = 0;
     }
@@ -193,9 +196,16 @@ class VADProcessor extends AudioWorkletProcessor {
         });
         
         this.isSpeaking = false;
+        
+        // MEMORY OPTIMIZATION: Explicitly clear buffers and trim pre-roll
         this.speechBuffer = [];
         this.silenceFrames = 0;
         this.speechFrames = 0;
+        
+        // Keep only the last pre-roll frames to avoid memory buildup
+        if (this.preRollBuffer.length > this.preRollFrames) {
+            this.preRollBuffer = this.preRollBuffer.slice(-this.preRollFrames);
+        }
     }
     
     extractSpeakerFeatures(samples) {

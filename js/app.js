@@ -55,10 +55,12 @@ const MODEL_LOAD_TIMEOUT = 300000; // 5 minutes
 
 // All available models
 // Using multilingual models for language support
+// MEMORY OPTIMIZATION: Removed whisper-small to reduce peak memory usage
+// Small model can use ~800MB+ which causes issues on lower-end machines
+// Using quantized models where available for lower memory footprint
 const AVAILABLE_MODELS = [
-    { id: 'Xenova/whisper-tiny', name: 'Whisper Tiny', size: '~75MB', multilingual: true },
-    { id: 'Xenova/whisper-base', name: 'Whisper Base', size: '~145MB', multilingual: true },
-    { id: 'Xenova/whisper-small', name: 'Whisper Small', size: '~490MB', multilingual: true }
+    { id: 'Xenova/whisper-tiny', name: 'Whisper Tiny', size: '~75MB', multilingual: true, quantized: true },
+    { id: 'Xenova/whisper-base', name: 'Whisper Base', size: '~145MB', multilingual: true, quantized: true }
 ];
 
 // Common languages for Whisper
@@ -116,6 +118,8 @@ const state = {
     // Meeting management
     currentMeeting: null,
     meetingDB: null,
+    // Memory optimization
+    lowMemoryMode: false,
     // AI Intelligence models (Phase 3)
     aiModels: {
         summarizer: null,           // DistilBART for summarization
@@ -186,6 +190,7 @@ const els = {
     aiModelStatus: document.getElementById('aiModelStatus'),
     aiStatusText: document.getElementById('aiStatusText'),
     loadAIModelsBtn: document.getElementById('loadAIModelsBtn'),
+    unloadAIModelsBtn: document.getElementById('unloadAIModelsBtn'),
     aiLoadingProgress: document.getElementById('aiLoadingProgress'),
     aiProgressFill: document.getElementById('aiProgressFill'),
     aiProgressText: document.getElementById('aiProgressText'),
@@ -206,7 +211,8 @@ const els = {
     sentimentNegativeCount: document.getElementById('sentimentNegativeCount'),
     exportMarkdownBtn: document.getElementById('exportMarkdownBtn'),
     exportJsonBtn: document.getElementById('exportJsonBtn'),
-    exportTextBtn: document.getElementById('exportTextBtn')
+    exportTextBtn: document.getElementById('exportTextBtn'),
+    lowMemoryMode: document.getElementById('lowMemoryMode')
 };
 
 // Utility functions
@@ -259,7 +265,7 @@ function validateFile(file) {
 
 // Update startup screen model status
 function updateStartupModelStatus(modelIndex, status, icon = '⏳') {
-    const modelElements = [els.modelTiny, els.modelBase, els.modelSmall];
+    const modelElements = [els.modelTiny, els.modelBase];
     const modelEl = modelElements[modelIndex];
     
     if (modelEl) {
@@ -1061,7 +1067,22 @@ function updateDiarizedTranscript() {
     // Build formatted transcript with speakers and timestamps
     let formatted = '';
     
-    for (const utt of state.utterances) {
+    // MEMORY OPTIMIZATION: In low memory mode, only show last 10 minutes
+    let utterancesToShow = state.utterances;
+    
+    if (state.lowMemoryMode && state.utterances.length > 0) {
+        const now = state.utterances[state.utterances.length - 1].timestamp;
+        const tenMinutesAgo = now - 600; // 10 minutes in seconds
+        
+        utterancesToShow = state.utterances.filter(utt => utt.timestamp >= tenMinutesAgo);
+        
+        if (utterancesToShow.length < state.utterances.length) {
+            const hiddenCount = state.utterances.length - utterancesToShow.length;
+            formatted += `\n[💾 Low Memory Mode: ${hiddenCount} older utterances hidden]\n`;
+        }
+    }
+    
+    for (const utt of utterancesToShow) {
         const time = formatTimestamp(utt.timestamp);
         const speaker = utt.speaker.name;
         
@@ -1072,8 +1093,11 @@ function updateDiarizedTranscript() {
     els.transcript.textContent = formatted.trim();
     els.transcript.scrollTop = els.transcript.scrollHeight;
     
-    // Update current transcript for compatibility
-    state.currentTranscript = formatted.trim();
+    // Update current transcript for compatibility (always use full transcript)
+    state.currentTranscript = state.utterances.map(utt => {
+        const time = formatTimestamp(utt.timestamp);
+        return `[${time}] ${utt.speaker.name}:\n${utt.text}`;
+    }).join('\n\n');
     
     // Update meeting stats
     updateMeetingStats();
@@ -1526,11 +1550,21 @@ function initializeApp() {
                 els.aiModelStatus.classList.add('loaded');
                 els.aiStatusText.textContent = '✅ AI models loaded - AI-powered summarization available';
                 els.loadAIModelsBtn.style.display = 'none';
+                if (els.unloadAIModelsBtn) els.unloadAIModelsBtn.style.display = 'inline-block';
             } else {
                 console.log('❌ Model loading failed - using rule-based fallback');
                 els.aiStatusText.textContent = '⚠️ Using rule-based intelligence (AI model failed to load)';
                 els.loadAIModelsBtn.disabled = false;
                 els.loadAIModelsBtn.textContent = '🔄 Retry Loading AI Models';
+            }
+        });
+    }
+    
+    // Phase 3: Unload AI models button
+    if (els.unloadAIModelsBtn) {
+        els.unloadAIModelsBtn.addEventListener('click', () => {
+            if (confirm('Unload AI models to free memory? You can reload them anytime.')) {
+                unloadIntelligenceModels();
             }
         });
     }
@@ -1562,6 +1596,27 @@ function initializeApp() {
     }
     if (els.exportTextBtn) {
         els.exportTextBtn.addEventListener('click', exportToText);
+    }
+    
+    // Memory optimization: Low memory mode toggle
+    if (els.lowMemoryMode) {
+        els.lowMemoryMode.addEventListener('change', (e) => {
+            state.lowMemoryMode = e.target.checked;
+            
+            if (state.lowMemoryMode) {
+                console.log('💾 Low Memory Mode ENABLED');
+                showAlert('💾 Low Memory Mode enabled - using Tiny model, limited history', 'success');
+                
+                // Force Tiny model
+                if (els.modelSelect) {
+                    els.modelSelect.value = 'Xenova/whisper-tiny';
+                    handleModelChange();
+                }
+            } else {
+                console.log('💾 Low Memory Mode DISABLED');
+                showAlert('Low Memory Mode disabled - full features available', 'success');
+            }
+        });
     }
     
     // Manual model load button
@@ -2072,6 +2127,36 @@ async function loadIntelligenceModels() {
  */
 function areAIModelsAvailable() {
     return state.aiModels.modelsLoaded && state.aiModels.summarizer !== null;
+}
+
+/**
+ * Unload AI models to free memory
+ * Call this after exporting intelligence to reduce memory footprint
+ */
+function unloadIntelligenceModels() {
+    console.log('🗑️ Unloading AI models to free memory...');
+    
+    state.aiModels.summarizer = null;
+    state.aiModels.classifier = null;
+    state.aiModels.modelsLoaded = false;
+    state.aiModels.isLoading = false;
+    state.aiModels.loadProgress = 0;
+    
+    // Update UI
+    if (els.aiModelStatus) {
+        els.aiModelStatus.classList.remove('loaded');
+    }
+    if (els.aiStatusText) {
+        els.aiStatusText.textContent = 'AI models unloaded (memory freed)';
+    }
+    if (els.loadAIModelsBtn) {
+        els.loadAIModelsBtn.style.display = 'inline-block';
+        els.loadAIModelsBtn.disabled = false;
+        els.loadAIModelsBtn.textContent = 'Load AI Models';
+    }
+    
+    console.log('✅ AI models unloaded - memory freed');
+    showAlert('🗑️ AI models unloaded - memory freed', 'success');
 }
 
 /**

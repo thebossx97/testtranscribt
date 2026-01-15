@@ -37,17 +37,15 @@
                     <span class="model-label">Base Model (~145MB, multilingual)</span>
                     <span class="model-status">Waiting...</span>
                 </div>
-                <div class="model-item" id="modelSmall">
-                    <span class="model-icon">⏳</span>
-                    <span class="model-label">Small Model (~490MB, multilingual)</span>
-                    <span class="model-status">Waiting...</span>
-                </div>
             </div>
             
             <div class="startup-info">
-                <p>First-time setup: Downloading ~365MB of AI models</p>
-                <p>This takes 3-5 minutes but only happens once</p>
+                <p>First-time setup: Downloading ~220MB of AI models</p>
+                <p>This takes 2-3 minutes but only happens once</p>
                 <p>All models will be cached for instant future use</p>
+                <p style="font-size: 12px; color: var(--color-gray-400); margin-top: 8px;">
+                    Memory optimized: Using Tiny + Base models only
+                </p>
             </div>
         </div>
     </div>
@@ -80,10 +78,15 @@
                         Model:
                     </label>
                     <select id="modelSelect">
-                        <option value="Xenova/whisper-tiny">Tiny (~75MB, fastest)</option>
+                        <option value="Xenova/whisper-tiny">Tiny (~75MB, fastest, low memory)</option>
                         <option value="Xenova/whisper-base" selected>Base (~145MB, balanced)</option>
-                        <option value="Xenova/whisper-small">Small (~490MB, most accurate)</option>
                     </select>
+                </div>
+                <div style="margin-left: 12px;">
+                    <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--color-gray-400); cursor: pointer;">
+                        <input type="checkbox" id="lowMemoryMode" style="cursor: pointer;">
+                        <span>💾 Low Memory Mode</span>
+                    </label>
                 </div>
                 <div class="model-selector" style="margin-left: 12px;">
                     <label for="languageSelect" style="font-size: 13px; color: var(--color-gray-400); margin-right: 6px;">
@@ -174,7 +177,10 @@
                         <span class="status-dot"></span>
                         <span id="aiStatusText">AI models not loaded</span>
                     </div>
-                    <button id="loadAIModelsBtn" class="btn btn-primary btn-sm">Load AI Models</button>
+                    <div style="display: flex; gap: 8px;">
+                        <button id="loadAIModelsBtn" class="btn btn-primary btn-sm">Load AI Models</button>
+                        <button id="unloadAIModelsBtn" class="btn btn-secondary btn-sm" style="display: none;">🗑️ Free Memory</button>
+                    </div>
                 </div>
 
                 <!-- AI Loading Progress -->
