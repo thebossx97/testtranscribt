@@ -4,10 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="Local browser-based audio transcription using Whisper AI. Upload files or capture screen/tab audio.">
-    <!-- CSP DISABLED temporarily to allow ONNX Runtime eval() for AI models -->
-    <!-- ONNX Runtime requires eval() for WebAssembly compilation and cannot work with strict CSP -->
-    <!-- TODO: Re-enable with proper configuration once models are working -->
-    <!-- <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://*.jsdelivr.net https://huggingface.co https://*.huggingface.co https://*.hf.co https://cdn-lfs.huggingface.co https://cdn-lfs-us-1.huggingface.co; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com https://r2cdn.perplexity.ai; connect-src 'self' https://huggingface.co https://*.huggingface.co https://*.hf.co https://cdn.jsdelivr.net https://*.jsdelivr.net https://cdn-lfs.huggingface.co https://cdn-lfs-us-1.huggingface.co https://cdn-lfs.hf.co blob: data:; worker-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data:; child-src 'self' blob:; img-src 'self' data: blob:;"> -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://huggingface.co https://*.huggingface.co https://*.hf.co; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com https://r2cdn.perplexity.ai; connect-src 'self' https://huggingface.co https://*.huggingface.co https://*.hf.co https://cdn.jsdelivr.net blob: data:; worker-src 'self' blob: data:; child-src 'self' blob:; img-src 'self' data: blob:;">
     <title>Local Whisper Transcriber</title>
     <link rel="stylesheet" href="css/styles.css">
 </head>

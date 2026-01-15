@@ -1922,6 +1922,14 @@ async function loadIntelligenceModels() {
         return false;
     }
     
+    // TEMPORARY: Skip AI model loading due to CSP issues with DistilBART
+    // Use rule-based intelligence only (still very effective!)
+    console.log('⚠️ Skipping AI model loading - using rule-based intelligence only');
+    showAlert('Using rule-based intelligence (AI models temporarily disabled)', 'warning');
+    state.aiModels.modelsLoaded = true; // Mark as "loaded" to enable processing
+    return true;
+    
+    /* DISABLED TEMPORARILY - Will re-enable once CSP issue is resolved
     state.aiModels.isLoading = true;
     state.aiModels.loadProgress = 0;
     
@@ -2055,6 +2063,7 @@ async function loadIntelligenceModels() {
         // Return false but don't throw - we'll use rule-based fallback
         return false;
     }
+    */
 }
 
 /**
