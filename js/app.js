@@ -37,9 +37,19 @@ function initTransformers() {
         env.backends.onnx.wasm.numThreads = navigator.hardwareConcurrency || 4;
         env.backends.onnx.wasm.proxy = false;
         
+        // CRITICAL: Disable WASM SIMD if CSP blocks it
+        // This is a workaround for strict CSP policies
+        try {
+            env.backends.onnx.wasm.simd = false;
+            console.log('  - WASM SIMD disabled (CSP workaround)');
+        } catch (e) {
+            console.warn('Could not disable SIMD:', e);
+        }
+        
         console.log('✓ Transformers.js configured:');
         console.log('  - allowLocalModels:', env.allowLocalModels);
         console.log('  - WASM threads:', env.backends.onnx.wasm.numThreads);
+        console.log('  - WASM proxy:', env.backends.onnx.wasm.proxy);
         console.log('  - Pipeline type:', typeof pipeline);
         console.log('  - Env type:', typeof env);
         return true;
@@ -1958,29 +1968,56 @@ async function loadIntelligenceModels() {
             quantized: true
         });
         
-        state.aiModels.summarizer = await pipeline(
-            'summarization',
-            modelId,
-            {
-                quantized: true,
-                progress_callback: (progress) => {
-                    console.log('Progress callback:', progress);
-                    if (progress.status === 'progress' && progress.progress !== undefined) {
-                        // Map progress to 10-90% range
-                        state.aiModels.loadProgress = 10 + Math.round(progress.progress * 0.8);
-                        console.log(`Model loading: ${state.aiModels.loadProgress}%`);
-                        
-                        // Update UI progress
-                        if (els.aiProgressFill) {
-                            els.aiProgressFill.style.width = state.aiModels.loadProgress + '%';
-                        }
-                        if (els.aiProgressText) {
-                            els.aiProgressText.textContent = `Loading model: ${state.aiModels.loadProgress}%`;
+        try {
+            state.aiModels.summarizer = await pipeline(
+                'summarization',
+                modelId,
+                {
+                    quantized: true,
+                    progress_callback: (progress) => {
+                        console.log('Progress callback:', progress);
+                        if (progress.status === 'progress' && progress.progress !== undefined) {
+                            // Map progress to 10-90% range
+                            state.aiModels.loadProgress = 10 + Math.round(progress.progress * 0.8);
+                            console.log(`Model loading: ${state.aiModels.loadProgress}%`);
+                            
+                            // Update UI progress
+                            if (els.aiProgressFill) {
+                                els.aiProgressFill.style.width = state.aiModels.loadProgress + '%';
+                            }
+                            if (els.aiProgressText) {
+                                els.aiProgressText.textContent = `Loading model: ${state.aiModels.loadProgress}%`;
+                            }
                         }
                     }
                 }
-            }
-        );
+            );
+        } catch (quantizedError) {
+            console.warn('Quantized model failed, trying without quantization:', quantizedError);
+            
+            // Fallback: try without quantization
+            state.aiModels.summarizer = await pipeline(
+                'summarization',
+                modelId,
+                {
+                    quantized: false,
+                    progress_callback: (progress) => {
+                        console.log('Progress callback (non-quantized):', progress);
+                        if (progress.status === 'progress' && progress.progress !== undefined) {
+                            state.aiModels.loadProgress = 10 + Math.round(progress.progress * 0.8);
+                            console.log(`Model loading: ${state.aiModels.loadProgress}%`);
+                            
+                            if (els.aiProgressFill) {
+                                els.aiProgressFill.style.width = state.aiModels.loadProgress + '%';
+                            }
+                            if (els.aiProgressText) {
+                                els.aiProgressText.textContent = `Loading model (non-quantized): ${state.aiModels.loadProgress}%`;
+                            }
+                        }
+                    }
+                }
+            );
+        }
         
         console.log('Pipeline returned:', typeof state.aiModels.summarizer);
         
