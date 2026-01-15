@@ -1917,17 +1917,29 @@ async function loadIntelligenceModels() {
     
     try {
         console.log('=== Loading AI Intelligence Models ===');
+        console.log('Pipeline available:', typeof pipeline);
+        console.log('Env available:', typeof env);
         
         // Check if transformers.js is available
         if (!pipeline || !env) {
-            throw new Error('Transformers.js not initialized');
+            console.error('❌ Transformers.js not initialized');
+            console.error('window.pipeline:', typeof window.pipeline);
+            console.error('window.env:', typeof window.env);
+            throw new Error('Transformers.js not initialized. Please refresh the page.');
         }
+        
+        console.log('✓ Transformers.js available');
+        console.log('Env config:', {
+            allowLocalModels: env.allowLocalModels,
+            backends: env.backends
+        });
         
         // Update UI - show loading state
         showAlert('Loading AI models for intelligence features...', 'warning');
         
         // Check if model is already cached
         const modelId = 'Xenova/distilbart-cnn-6-6';
+        console.log('Loading model:', modelId);
         const isCached = await isAIModelCached(modelId);
         
         if (isCached) {
@@ -1940,20 +1952,37 @@ async function loadIntelligenceModels() {
         console.log('Loading DistilBART summarization model...');
         state.aiModels.loadProgress = 10;
         
+        console.log('Calling pipeline() with:', {
+            task: 'summarization',
+            model: modelId,
+            quantized: true
+        });
+        
         state.aiModels.summarizer = await pipeline(
             'summarization',
             modelId,
             {
                 quantized: true,
                 progress_callback: (progress) => {
+                    console.log('Progress callback:', progress);
                     if (progress.status === 'progress' && progress.progress !== undefined) {
                         // Map progress to 10-90% range
                         state.aiModels.loadProgress = 10 + Math.round(progress.progress * 0.8);
                         console.log(`Model loading: ${state.aiModels.loadProgress}%`);
+                        
+                        // Update UI progress
+                        if (els.aiProgressFill) {
+                            els.aiProgressFill.style.width = state.aiModels.loadProgress + '%';
+                        }
+                        if (els.aiProgressText) {
+                            els.aiProgressText.textContent = `Loading model: ${state.aiModels.loadProgress}%`;
+                        }
                     }
                 }
             }
         );
+        
+        console.log('Pipeline returned:', typeof state.aiModels.summarizer);
         
         console.log('✓ DistilBART model loaded');
         state.aiModels.loadProgress = 100;
@@ -1971,11 +2000,20 @@ async function loadIntelligenceModels() {
         return true;
         
     } catch (error) {
-        console.error('Failed to load AI models:', error);
+        console.error('❌ Failed to load AI models:', error);
+        console.error('Error name:', error.name);
+        console.error('Error message:', error.message);
+        console.error('Error stack:', error.stack);
+        
         state.aiModels.isLoading = false;
         state.aiModels.loadProgress = 0;
         
-        showAlert(`Failed to load AI models: ${error.message}. Using rule-based fallback.`, 'warning');
+        // Check if it's a CSP error
+        if (error.message.includes('eval') || error.message.includes('CSP') || error.message.includes('Content Security Policy')) {
+            showAlert(`CSP Error: ${error.message}. Check browser console for details.`, 'error');
+        } else {
+            showAlert(`Failed to load AI models: ${error.message}. Using rule-based fallback.`, 'warning');
+        }
         
         // Return false but don't throw - we'll use rule-based fallback
         return false;
