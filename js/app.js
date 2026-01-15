@@ -1912,14 +1912,6 @@ async function loadIntelligenceModels() {
         return false;
     }
     
-    // TEMPORARY: Skip AI model loading due to CSP issues with DistilBART
-    // Use rule-based intelligence only (still very effective!)
-    console.log('⚠️ Skipping AI model loading - using rule-based intelligence only');
-    showAlert('Using rule-based intelligence (AI models temporarily disabled)', 'warning');
-    state.aiModels.modelsLoaded = true; // Mark as "loaded" to enable processing
-    return true;
-    
-    /* DISABLED TEMPORARILY - Will re-enable once CSP issue is resolved
     state.aiModels.isLoading = true;
     state.aiModels.loadProgress = 0;
     
@@ -1957,69 +1949,32 @@ async function loadIntelligenceModels() {
         }
         
         // Load DistilBART for summarization (268MB)
+        // Using same simple approach as Whisper models
         console.log('Loading DistilBART summarization model...');
         state.aiModels.loadProgress = 10;
         
-        console.log('Calling pipeline() with:', {
-            task: 'summarization',
-            model: modelId,
-            quantized: true
-        });
-        
-        try {
-            state.aiModels.summarizer = await pipeline(
-                'summarization',
-                modelId,
-                {
-                    quantized: true,
-                    progress_callback: (progress) => {
-                        console.log('Progress callback:', progress);
-                        if (progress.status === 'progress' && progress.progress !== undefined) {
-                            // Map progress to 10-90% range
-                            state.aiModels.loadProgress = 10 + Math.round(progress.progress * 0.8);
-                            console.log(`Model loading: ${state.aiModels.loadProgress}%`);
-                            
-                            // Update UI progress
-                            if (els.aiProgressFill) {
-                                els.aiProgressFill.style.width = state.aiModels.loadProgress + '%';
-                            }
-                            if (els.aiProgressText) {
-                                els.aiProgressText.textContent = `Loading model: ${state.aiModels.loadProgress}%`;
-                            }
+        state.aiModels.summarizer = await pipeline(
+            'summarization',
+            modelId,
+            {
+                progress_callback: (progress) => {
+                    if (progress.status === 'progress' && progress.progress !== undefined) {
+                        state.aiModels.loadProgress = 10 + Math.round(progress.progress * 0.8);
+                        console.log(`Model loading: ${state.aiModels.loadProgress}%`);
+                        
+                        // Update UI progress
+                        if (els.aiProgressFill) {
+                            els.aiProgressFill.style.width = state.aiModels.loadProgress + '%';
+                        }
+                        if (els.aiProgressText) {
+                            els.aiProgressText.textContent = `Loading model: ${state.aiModels.loadProgress}%`;
                         }
                     }
                 }
-            );
-        } catch (quantizedError) {
-            console.warn('Quantized model failed, trying without quantization:', quantizedError);
-            
-            // Fallback: try without quantization
-            state.aiModels.summarizer = await pipeline(
-                'summarization',
-                modelId,
-                {
-                    quantized: false,
-                    progress_callback: (progress) => {
-                        console.log('Progress callback (non-quantized):', progress);
-                        if (progress.status === 'progress' && progress.progress !== undefined) {
-                            state.aiModels.loadProgress = 10 + Math.round(progress.progress * 0.8);
-                            console.log(`Model loading: ${state.aiModels.loadProgress}%`);
-                            
-                            if (els.aiProgressFill) {
-                                els.aiProgressFill.style.width = state.aiModels.loadProgress + '%';
-                            }
-                            if (els.aiProgressText) {
-                                els.aiProgressText.textContent = `Loading model (non-quantized): ${state.aiModels.loadProgress}%`;
-                            }
-                        }
-                    }
-                }
-            );
-        }
+            }
+        );
         
-        console.log('Pipeline returned:', typeof state.aiModels.summarizer);
-        
-        console.log('✓ DistilBART model loaded');
+        console.log('✓ DistilBART model loaded successfully');
         state.aiModels.loadProgress = 100;
         
         // Cache metadata for future reference
@@ -2053,7 +2008,6 @@ async function loadIntelligenceModels() {
         // Return false but don't throw - we'll use rule-based fallback
         return false;
     }
-    */
 }
 
 /**
