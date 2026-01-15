@@ -189,6 +189,8 @@ const els = {
     aiLoadingProgress: document.getElementById('aiLoadingProgress'),
     aiProgressFill: document.getElementById('aiProgressFill'),
     aiProgressText: document.getElementById('aiProgressText'),
+    generateIntelligenceSection: document.getElementById('generateIntelligenceSection'),
+    generateIntelligenceBtn: document.getElementById('generateIntelligenceBtn'),
     intelligenceContent: document.getElementById('intelligenceContent'),
     intelligenceEmptyState: document.getElementById('intelligenceEmptyState'),
     summaryExecutive: document.getElementById('summaryExecutive'),
@@ -1376,6 +1378,16 @@ function stopScreenShare() {
     setStatus('✓ Recording stopped', false);
     
     console.log('✅ Recording stopped, transcript ready');
+    
+    // Process intelligence after recording stops
+    if (state.utterances.length > 0) {
+        console.log('🧠 Processing intelligence after recording...');
+        setTimeout(() => {
+            processTranscriptIntelligence().catch(err => {
+                console.error('Intelligence processing failed:', err);
+            });
+        }, 500);
+    }
 }
 
 // Event handlers
@@ -1501,6 +1513,24 @@ function initializeApp() {
                 els.loadAIModelsBtn.style.display = 'none';
             } else {
                 els.loadAIModelsBtn.disabled = false;
+            }
+        });
+    }
+    
+    // Phase 3: Generate Intelligence button
+    if (els.generateIntelligenceBtn) {
+        els.generateIntelligenceBtn.addEventListener('click', async () => {
+            els.generateIntelligenceBtn.disabled = true;
+            els.generateIntelligenceBtn.textContent = '⏳ Processing...';
+            
+            try {
+                await processTranscriptIntelligence();
+                showAlert('✓ Intelligence generated successfully', 'success');
+            } catch (error) {
+                showAlert('Failed to generate intelligence: ' + error.message, 'error');
+            } finally {
+                els.generateIntelligenceBtn.disabled = false;
+                els.generateIntelligenceBtn.textContent = '🧠 Generate Intelligence';
             }
         });
     }
@@ -1997,15 +2027,738 @@ function switchTab(tabName) {
  * Update intelligence display based on current state
  */
 function updateIntelligenceDisplay() {
-    const hasData = state.utterances.length > 0;
+    const hasUtterances = state.utterances.length > 0;
+    const hasIntelligence = state.meetingIntelligence.summary.executive.length > 0;
     
-    if (hasData) {
-        els.intelligenceEmptyState.style.display = 'none';
-        els.intelligenceContent.style.display = 'block';
-    } else {
-        els.intelligenceEmptyState.style.display = 'block';
+    // Show/hide generate button
+    if (hasUtterances && !hasIntelligence) {
+        els.generateIntelligenceSection.style.display = 'block';
         els.intelligenceContent.style.display = 'none';
+        els.intelligenceEmptyState.style.display = 'none';
+    } else if (hasIntelligence) {
+        els.generateIntelligenceSection.style.display = 'none';
+        els.intelligenceContent.style.display = 'block';
+        els.intelligenceEmptyState.style.display = 'none';
+        
+        // Populate intelligence data
+        renderIntelligenceData();
+    } else {
+        els.generateIntelligenceSection.style.display = 'none';
+        els.intelligenceContent.style.display = 'none';
+        els.intelligenceEmptyState.style.display = 'block';
     }
+}
+
+/**
+ * Render intelligence data to UI
+ */
+function renderIntelligenceData() {
+    const intel = state.meetingIntelligence;
+    
+    // Render summary
+    if (els.summaryExecutive) {
+        els.summaryExecutive.textContent = intel.summary.executive || 'No summary available.';
+    }
+    
+    // Render action items
+    if (els.actionItemsList) {
+        if (intel.actionItems.length === 0) {
+            els.actionItemsList.innerHTML = '<p class="empty-state">No action items detected.</p>';
+        } else {
+            els.actionItemsList.innerHTML = intel.actionItems.map(action => `
+                <div class="action-item">
+                    <input type="checkbox" class="action-item-checkbox" ${action.status === 'done' ? 'checked' : ''}>
+                    <div class="action-item-content">
+                        <div class="action-item-text">${escapeHtml(action.text)}</div>
+                        <div class="action-item-meta">
+                            <span>👤 ${escapeHtml(action.assignee)}</span>
+                            ${action.deadline ? `<span>📅 ${escapeHtml(action.deadline)}</span>` : ''}
+                            <span class="priority-badge priority-${action.priority}">${action.priority}</span>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+    }
+    
+    // Render decisions
+    if (els.decisionsList) {
+        if (intel.decisions.length === 0) {
+            els.decisionsList.innerHTML = '<p class="empty-state">No decisions detected.</p>';
+        } else {
+            els.decisionsList.innerHTML = intel.decisions.map(decision => `
+                <div class="decision-item">
+                    <div class="decision-text">${escapeHtml(decision.text)}</div>
+                    <div class="decision-meta">
+                        👤 ${decision.speaker ? escapeHtml(decision.speaker.name) : 'Unknown'} • 
+                        ${new Date(decision.timestamp).toLocaleTimeString()}
+                    </div>
+                </div>
+            `).join('');
+        }
+    }
+    
+    // Render topics
+    if (els.topicsList) {
+        if (intel.topics.length === 0) {
+            els.topicsList.innerHTML = '<p class="empty-state">No topics detected.</p>';
+        } else {
+            els.topicsList.innerHTML = intel.topics.map(topic => `
+                <span class="topic-tag">${escapeHtml(topic.text)} (${topic.count})</span>
+            `).join('');
+        }
+    }
+}
+
+/**
+ * Escape HTML to prevent XSS
+ */
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+/**
+ * Process transcript to generate intelligence insights
+ * Main orchestration function for Phase 3
+ */
+async function processTranscriptIntelligence() {
+    console.log('=== Processing Transcript Intelligence ===');
+    
+    // Check if we have utterances to process
+    if (!state.utterances || state.utterances.length === 0) {
+        console.log('No utterances to process');
+        return;
+    }
+    
+    // Get full transcript text
+    const fullText = state.utterances
+        .map(u => u.text)
+        .join(' ')
+        .trim();
+    
+    if (!fullText || fullText.length < 50) {
+        console.log('Transcript too short for intelligence processing');
+        return;
+    }
+    
+    console.log(`Processing ${state.utterances.length} utterances, ${fullText.length} characters`);
+    
+    try {
+        // 1. Generate Summary (AI or rule-based)
+        console.log('Generating summary...');
+        state.meetingIntelligence.summary = await generateSummary(fullText);
+        
+        // 2. Extract Action Items
+        console.log('Extracting action items...');
+        state.meetingIntelligence.actionItems = extractActionItems(state.utterances);
+        
+        // 3. Extract Decisions
+        console.log('Extracting decisions...');
+        state.meetingIntelligence.decisions = extractDecisions(state.utterances);
+        
+        // 4. Extract Topics
+        console.log('Extracting topics...');
+        state.meetingIntelligence.topics = extractTopics(state.utterances);
+        
+        // 5. Extract Questions
+        console.log('Extracting questions...');
+        state.meetingIntelligence.questions = extractQuestions(state.utterances);
+        
+        // 6. Analyze Sentiment
+        console.log('Analyzing sentiment...');
+        state.meetingIntelligence.sentiment = analyzeSentiment(fullText);
+        
+        // 7. Extract Key Points
+        console.log('Extracting key points...');
+        state.meetingIntelligence.keyPoints = extractKeyPoints(fullText);
+        
+        // Update last processed marker
+        state.meetingIntelligence.lastProcessedUtterance = state.utterances.length;
+        
+        console.log('✓ Intelligence processing complete');
+        console.log('Summary:', state.meetingIntelligence.summary.executive);
+        console.log('Action Items:', state.meetingIntelligence.actionItems.length);
+        console.log('Decisions:', state.meetingIntelligence.decisions.length);
+        console.log('Topics:', state.meetingIntelligence.topics.length);
+        
+        // Update UI if on intelligence tab
+        updateIntelligenceDisplay();
+        
+    } catch (error) {
+        console.error('Error processing intelligence:', error);
+        showAlert('Failed to process intelligence: ' + error.message, 'error');
+    }
+}
+
+/**
+ * Generate summary (executive, standard, detailed)
+ * Uses AI model if available, falls back to rule-based
+ */
+async function generateSummary(text) {
+    const summary = {
+        executive: '',
+        standard: '',
+        detailed: []
+    };
+    
+    // Generate executive summary (1-2 sentences)
+    if (areAIModelsAvailable()) {
+        try {
+            // Use AI model for abstractive summary
+            const chunks = smartChunkText(text, 1000);
+            const summaries = [];
+            
+            for (const chunk of chunks) {
+                const result = await state.aiModels.summarizer(chunk, {
+                    max_length: 100,
+                    min_length: 30
+                });
+                
+                if (result && result[0] && result[0].summary_text) {
+                    summaries.push(result[0].summary_text);
+                }
+            }
+            
+            // Combine chunk summaries
+            if (summaries.length > 0) {
+                summary.executive = summaries.join(' ').slice(0, 200);
+                summary.standard = summaries.join(' ');
+            }
+            
+        } catch (error) {
+            console.warn('AI summarization failed, using fallback:', error);
+            summary.executive = generateRuleBasedSummary(text, 2);
+            summary.standard = generateRuleBasedSummary(text, 5);
+        }
+    } else {
+        // Use rule-based fallback
+        summary.executive = generateRuleBasedSummary(text, 2);
+        summary.standard = generateRuleBasedSummary(text, 5);
+    }
+    
+    // Generate detailed bullet points (extractive)
+    summary.detailed = generateExtractiveSummary(text, 8);
+    
+    return summary;
+}
+
+/**
+ * Smart text chunking for AI processing
+ * Splits text into chunks of maxWords, respecting sentence boundaries
+ */
+function smartChunkText(text, maxWords = 1000) {
+    const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
+    const chunks = [];
+    let currentChunk = [];
+    let currentWordCount = 0;
+    
+    for (const sentence of sentences) {
+        const words = sentence.trim().split(/\s+/).length;
+        
+        if (currentWordCount + words > maxWords && currentChunk.length > 0) {
+            // Start new chunk
+            chunks.push(currentChunk.join(' '));
+            currentChunk = [sentence];
+            currentWordCount = words;
+        } else {
+            currentChunk.push(sentence);
+            currentWordCount += words;
+        }
+    }
+    
+    // Add remaining chunk
+    if (currentChunk.length > 0) {
+        chunks.push(currentChunk.join(' '));
+    }
+    
+    return chunks;
+}
+
+/**
+ * Generate extractive summary (key sentences)
+ */
+function generateExtractiveSummary(text, maxSentences = 8) {
+    const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
+    
+    if (sentences.length <= maxSentences) {
+        return sentences.map(s => s.trim());
+    }
+    
+    // Score sentences
+    const keywords = [
+        'decided', 'agreed', 'action', 'next', 'important', 'critical',
+        'must', 'should', 'will', 'need', 'discussed', 'concluded',
+        'summary', 'key', 'main', 'focus'
+    ];
+    
+    const scoredSentences = sentences.map((sentence, index) => {
+        let score = 0;
+        const lowerSentence = sentence.toLowerCase();
+        const words = sentence.trim().split(/\s+/).length;
+        
+        // Position bonus
+        if (index === 0) score += 3;
+        if (index === sentences.length - 1) score += 2;
+        
+        // Length scoring
+        if (words < 5) score -= 2;
+        if (words > 10 && words < 30) score += 2;
+        if (words > 30) score -= 1;
+        
+        // Keyword bonus
+        keywords.forEach(keyword => {
+            if (lowerSentence.includes(keyword)) score += 2;
+        });
+        
+        return { sentence: sentence.trim(), score, index };
+    });
+    
+    // Get top sentences, maintain order
+    return scoredSentences
+        .sort((a, b) => b.score - a.score)
+        .slice(0, maxSentences)
+        .sort((a, b) => a.index - b.index)
+        .map(s => s.sentence);
+}
+
+/**
+ * Extract key points from text
+ */
+function extractKeyPoints(text) {
+    // Use extractive summary as key points
+    return generateExtractiveSummary(text, 5);
+}
+
+/**
+ * Extract action items from utterances
+ * Uses pattern matching to identify tasks, assignments, and follow-ups
+ */
+function extractActionItems(utterances) {
+    const actionItems = [];
+    let actionId = 1;
+    
+    // Action patterns
+    const actionPatterns = [
+        /(?:I|we|you|they|'ll|will|need to|should|must)\s+([^.!?]{10,})/gi,
+        /(?:let's|lets)\s+([^.!?]{10,})/gi,
+        /(?:can you|could you|would you|please)\s+([^.!?]{10,})/gi,
+        /(?:TODO|FIXME|ACTION):\s*([^.!?]+)/gi,
+        /(?:next step|action item|follow[- ]up):\s*([^.!?]+)/gi,
+        /(?:going to|gonna)\s+([^.!?]{10,})/gi
+    ];
+    
+    utterances.forEach((utterance, index) => {
+        const text = utterance.text;
+        const lowerText = text.toLowerCase();
+        
+        // Check each pattern
+        actionPatterns.forEach(pattern => {
+            const matches = [...text.matchAll(pattern)];
+            
+            matches.forEach(match => {
+                const actionText = match[1] ? match[1].trim() : match[0].trim();
+                
+                // Filter out very short or generic matches
+                if (actionText.length < 10 || actionText.length > 200) return;
+                
+                // Skip if it's a question without action intent
+                if (actionText.includes('?') && !lowerText.includes('can you')) return;
+                
+                // Determine priority
+                const priority = determinePriority(text);
+                
+                // Determine assignee
+                const assignee = determineAssignee(text, utterance.speaker);
+                
+                // Extract deadline if present
+                const deadline = extractDeadline(text);
+                
+                // Categorize action
+                const category = categorizeAction(actionText);
+                
+                actionItems.push({
+                    id: `action_${actionId++}`,
+                    text: actionText,
+                    speaker: utterance.speaker,
+                    assignee: assignee,
+                    deadline: deadline,
+                    priority: priority,
+                    status: 'pending',
+                    category: category,
+                    timestamp: utterance.timestamp || Date.now(),
+                    context: text
+                });
+            });
+        });
+    });
+    
+    // Deduplicate similar actions
+    return deduplicateActions(actionItems);
+}
+
+/**
+ * Determine priority based on keywords
+ */
+function determinePriority(text) {
+    const lowerText = text.toLowerCase();
+    
+    const urgentKeywords = ['urgent', 'asap', 'immediately', 'critical', 'must', 'now', 'today'];
+    const highKeywords = ['important', 'should', 'need to', 'priority', 'soon'];
+    
+    if (urgentKeywords.some(kw => lowerText.includes(kw))) {
+        return 'urgent';
+    }
+    if (highKeywords.some(kw => lowerText.includes(kw))) {
+        return 'high';
+    }
+    return 'normal';
+}
+
+/**
+ * Determine assignee from text
+ */
+function determineAssignee(text, speaker) {
+    const lowerText = text.toLowerCase();
+    
+    // Check for explicit assignment
+    if (lowerText.includes('you ') || lowerText.includes('can you') || lowerText.includes('could you')) {
+        return 'Assigned to listener';
+    }
+    if (lowerText.includes('i will') || lowerText.includes("i'll") || lowerText.includes('i need to')) {
+        return speaker ? speaker.name : 'Self-assigned';
+    }
+    if (lowerText.includes('we ') || lowerText.includes("we'll") || lowerText.includes('let\'s')) {
+        return 'Team';
+    }
+    
+    return speaker ? speaker.name : 'Unassigned';
+}
+
+/**
+ * Extract deadline from text
+ */
+function extractDeadline(text) {
+    const deadlinePatterns = [
+        /by\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i,
+        /by\s+(tomorrow|today|tonight)/i,
+        /by\s+(next\s+week|this\s+week|end of week)/i,
+        /by\s+(\w+\s+\d+)/i,  // "by Jan 15"
+        /by\s+(the\s+)?(\d+)(st|nd|rd|th)?/i  // "by the 15th"
+    ];
+    
+    for (const pattern of deadlinePatterns) {
+        const match = text.match(pattern);
+        if (match) {
+            return match[1] || match[0];
+        }
+    }
+    
+    return null;
+}
+
+/**
+ * Categorize action type
+ */
+function categorizeAction(text) {
+    const lowerText = text.toLowerCase();
+    
+    if (lowerText.includes('send') || lowerText.includes('email') || lowerText.includes('message')) {
+        return 'communication';
+    }
+    if (lowerText.includes('review') || lowerText.includes('check') || lowerText.includes('look at')) {
+        return 'review';
+    }
+    if (lowerText.includes('create') || lowerText.includes('build') || lowerText.includes('develop')) {
+        return 'deliverable';
+    }
+    if (lowerText.includes('schedule') || lowerText.includes('meeting') || lowerText.includes('call')) {
+        return 'meeting';
+    }
+    if (lowerText.includes('update') || lowerText.includes('inform') || lowerText.includes('notify')) {
+        return 'update';
+    }
+    
+    return 'task';
+}
+
+/**
+ * Deduplicate similar action items
+ */
+function deduplicateActions(actions) {
+    if (actions.length === 0) return actions;
+    
+    const unique = [];
+    const seen = new Set();
+    
+    actions.forEach(action => {
+        // Create a normalized key for comparison
+        const key = action.text.toLowerCase()
+            .replace(/[^a-z0-9\s]/g, '')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 50);
+        
+        if (!seen.has(key)) {
+            seen.add(key);
+            unique.push(action);
+        }
+    });
+    
+    return unique;
+}
+
+/**
+ * Extract decisions from utterances
+ * Identifies key decisions made during the meeting
+ */
+function extractDecisions(utterances) {
+    const decisions = [];
+    let decisionId = 1;
+    
+    // Decision patterns
+    const decisionPatterns = [
+        /(?:we|we've|we have)\s+decided\s+(?:to\s+)?([^.!?]{10,})/gi,
+        /(?:decision|agreed|agreement):\s+([^.!?]{10,})/gi,
+        /(?:let's go with|going with|go with)\s+([^.!?]{10,})/gi,
+        /(?:approved|confirmed|finalized)\s+([^.!?]{10,})/gi,
+        /(?:consensus|unanimous)\s+(?:on|that|to)\s+([^.!?]{10,})/gi,
+        /(?:settled on|settling on)\s+([^.!?]{10,})/gi,
+        /(?:final decision|final call)\s+(?:is|was)?\s*:?\s*([^.!?]{10,})/gi
+    ];
+    
+    utterances.forEach((utterance, index) => {
+        const text = utterance.text;
+        
+        // Check each pattern
+        decisionPatterns.forEach(pattern => {
+            const matches = [...text.matchAll(pattern)];
+            
+            matches.forEach(match => {
+                const decisionText = match[1] ? match[1].trim() : match[0].trim();
+                
+                // Filter out very short or very long matches
+                if (decisionText.length < 10 || decisionText.length > 200) return;
+                
+                // Skip if it's a question
+                if (decisionText.includes('?')) return;
+                
+                decisions.push({
+                    id: `decision_${decisionId++}`,
+                    text: decisionText,
+                    speaker: utterance.speaker,
+                    timestamp: utterance.timestamp || Date.now(),
+                    context: text,
+                    confirmed: true
+                });
+            });
+        });
+    });
+    
+    // Deduplicate similar decisions
+    return deduplicateDecisions(decisions);
+}
+
+/**
+ * Deduplicate similar decisions
+ */
+function deduplicateDecisions(decisions) {
+    if (decisions.length === 0) return decisions;
+    
+    const unique = [];
+    const seen = new Set();
+    
+    decisions.forEach(decision => {
+        const key = decision.text.toLowerCase()
+            .replace(/[^a-z0-9\s]/g, '')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 50);
+        
+        if (!seen.has(key)) {
+            seen.add(key);
+            unique.push(decision);
+        }
+    });
+    
+    return unique;
+}
+
+/**
+ * Extract main topics from utterances
+ * Uses frequency analysis and keyword extraction
+ */
+function extractTopics(utterances) {
+    // Combine all text
+    const fullText = utterances.map(u => u.text).join(' ').toLowerCase();
+    
+    // Common stop words to exclude
+    const stopWords = new Set([
+        'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+        'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'been',
+        'be', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would',
+        'could', 'should', 'may', 'might', 'can', 'this', 'that', 'these',
+        'those', 'i', 'you', 'he', 'she', 'it', 'we', 'they', 'what', 'which',
+        'who', 'when', 'where', 'why', 'how', 'all', 'each', 'every', 'both',
+        'few', 'more', 'most', 'other', 'some', 'such', 'no', 'nor', 'not',
+        'only', 'own', 'same', 'so', 'than', 'too', 'very', 'just', 'now',
+        'then', 'there', 'here', 'also', 'well', 'like', 'yeah', 'yes', 'okay',
+        'ok', 'um', 'uh', 'gonna', 'wanna', 'gotta'
+    ]);
+    
+    // Extract words (2+ characters, alphanumeric)
+    const words = fullText.match(/\b[a-z]{2,}\b/g) || [];
+    
+    // Count word frequency
+    const frequency = {};
+    words.forEach(word => {
+        if (!stopWords.has(word)) {
+            frequency[word] = (frequency[word] || 0) + 1;
+        }
+    });
+    
+    // Extract bigrams (two-word phrases)
+    const bigrams = {};
+    for (let i = 0; i < words.length - 1; i++) {
+        const word1 = words[i];
+        const word2 = words[i + 1];
+        
+        if (!stopWords.has(word1) && !stopWords.has(word2)) {
+            const bigram = `${word1} ${word2}`;
+            bigrams[bigram] = (bigrams[bigram] || 0) + 1;
+        }
+    }
+    
+    // Get top single words (mentioned 3+ times)
+    const topWords = Object.entries(frequency)
+        .filter(([word, count]) => count >= 3)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 10)
+        .map(([word, count]) => ({ text: word, count, type: 'word' }));
+    
+    // Get top bigrams (mentioned 2+ times)
+    const topBigrams = Object.entries(bigrams)
+        .filter(([phrase, count]) => count >= 2)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([phrase, count]) => ({ text: phrase, count, type: 'phrase' }));
+    
+    // Combine and sort by count
+    return [...topBigrams, ...topWords]
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 12);
+}
+
+/**
+ * Extract questions from utterances
+ * Classifies as answered or unanswered based on context
+ */
+function extractQuestions(utterances) {
+    const questions = [];
+    let questionId = 1;
+    
+    utterances.forEach((utterance, index) => {
+        const text = utterance.text;
+        
+        // Find questions (sentences ending with ?)
+        const questionSentences = text.match(/[^.!?]*\?/g) || [];
+        
+        questionSentences.forEach(questionText => {
+            questionText = questionText.trim();
+            
+            // Skip very short questions
+            if (questionText.length < 10) return;
+            
+            // Check if question was answered (look at next few utterances)
+            let answered = false;
+            const lookAhead = 3;
+            
+            for (let i = index + 1; i < Math.min(index + lookAhead + 1, utterances.length); i++) {
+                const nextText = utterances[i].text.toLowerCase();
+                
+                // Check for answer indicators
+                if (
+                    nextText.includes('yes') ||
+                    nextText.includes('no') ||
+                    nextText.includes('i think') ||
+                    nextText.includes('probably') ||
+                    nextText.includes('definitely') ||
+                    nextText.includes('the answer') ||
+                    nextText.includes('that would be') ||
+                    nextText.length > 50  // Substantial response
+                ) {
+                    answered = true;
+                    break;
+                }
+            }
+            
+            questions.push({
+                id: `question_${questionId++}`,
+                text: questionText,
+                speaker: utterance.speaker,
+                timestamp: utterance.timestamp || Date.now(),
+                answered: answered,
+                context: text
+            });
+        });
+    });
+    
+    return questions;
+}
+
+/**
+ * Analyze sentiment of the meeting
+ * Returns counts of positive, neutral, and negative sentiment
+ */
+function analyzeSentiment(text) {
+    const lowerText = text.toLowerCase();
+    
+    // Positive keywords
+    const positiveKeywords = [
+        'great', 'good', 'excellent', 'awesome', 'fantastic', 'wonderful',
+        'perfect', 'love', 'like', 'happy', 'excited', 'amazing', 'brilliant',
+        'success', 'successful', 'agree', 'agreed', 'yes', 'definitely',
+        'absolutely', 'positive', 'progress', 'improvement', 'better',
+        'thanks', 'thank you', 'appreciate', 'well done', 'congratulations'
+    ];
+    
+    // Negative keywords
+    const negativeKeywords = [
+        'bad', 'terrible', 'awful', 'horrible', 'poor', 'worst', 'hate',
+        'dislike', 'unhappy', 'sad', 'disappointed', 'disappointing',
+        'concern', 'concerned', 'worry', 'worried', 'problem', 'issue',
+        'difficult', 'hard', 'struggle', 'struggling', 'fail', 'failed',
+        'failure', 'wrong', 'mistake', 'error', 'unfortunately', 'sadly',
+        'disagree', 'no', 'not good', 'not great'
+    ];
+    
+    // Count occurrences
+    let positiveCount = 0;
+    let negativeCount = 0;
+    
+    positiveKeywords.forEach(keyword => {
+        const regex = new RegExp(`\\b${keyword}\\b`, 'gi');
+        const matches = lowerText.match(regex);
+        if (matches) positiveCount += matches.length;
+    });
+    
+    negativeKeywords.forEach(keyword => {
+        const regex = new RegExp(`\\b${keyword}\\b`, 'gi');
+        const matches = lowerText.match(regex);
+        if (matches) negativeCount += matches.length;
+    });
+    
+    // Calculate neutral (total sentences minus sentiment sentences)
+    const totalSentences = (text.match(/[.!?]+/g) || []).length;
+    const sentimentSentences = positiveCount + negativeCount;
+    const neutralCount = Math.max(0, totalSentences - sentimentSentences);
+    
+    return {
+        positive: positiveCount,
+        neutral: neutralCount,
+        negative: negativeCount
+    };
 }
 
 /**
