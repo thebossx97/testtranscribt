@@ -37,19 +37,9 @@ function initTransformers() {
         env.backends.onnx.wasm.numThreads = navigator.hardwareConcurrency || 4;
         env.backends.onnx.wasm.proxy = false;
         
-        // CRITICAL: Disable WASM SIMD if CSP blocks it
-        // This is a workaround for strict CSP policies
-        try {
-            env.backends.onnx.wasm.simd = false;
-            console.log('  - WASM SIMD disabled (CSP workaround)');
-        } catch (e) {
-            console.warn('Could not disable SIMD:', e);
-        }
-        
         console.log('✓ Transformers.js configured:');
         console.log('  - allowLocalModels:', env.allowLocalModels);
         console.log('  - WASM threads:', env.backends.onnx.wasm.numThreads);
-        console.log('  - WASM proxy:', env.backends.onnx.wasm.proxy);
         console.log('  - Pipeline type:', typeof pipeline);
         console.log('  - Env type:', typeof env);
         return true;
